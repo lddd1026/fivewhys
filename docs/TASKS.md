@@ -8,9 +8,7 @@
 
 ## 进行中
 
-- [~] **FIV-1** 实现 `db_pool_exhausted` 故障注入 · `P0` · 约 2h
-  - 分支：`feat/FIV-1-inject-db-pool`
-  - 涉及：`src/fivewhys/mock/scenarios.py`、`src/fivewhys/mock/service.py`、`tests/test_smoke.py`
+（空）
 
 ---
 
@@ -84,6 +82,10 @@
 ---
 
 ## 已完成
+
+- [x] **FIV-1** 实现 `db_pool_exhausted` 故障注入 · 已完成
+  - 提交：`4ec2e2a feat(mock): 实现 db_pool_exhausted 故障注入`
+  - 验收：ERROR 17 条（区间 10~30）· 可复现 · 无答案泄漏 · 16 passed
 
 - [x] **FIV-0b** 建立开发流程工具 · 已完成
   - `docs/WORKFLOW.md` —— 每个任务的 7 步流程
