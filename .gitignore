@@ -1,0 +1,37 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ---- 测试 / 类型检查 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ---- 密钥（绝对不能提交）----
+.env
+.env.local
+*.key
+
+# ---- 本地运行时数据 ----
+# 场景快照、trace、评测结果、生成的简历式报告都在这里，不进版本库
+data/*
+!data/.gitkeep
+benchmarks/out/
+benchmarks/*.json
+!benchmarks/.gitkeep
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

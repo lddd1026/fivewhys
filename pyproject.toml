@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fivewhys"
+version = "0.1.0"
+description = "Agent-driven root cause analysis. Ask why five times."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "刘达", email = "1036179451@qq.com" }]
+keywords = [
+    "agent",
+    "llm",
+    "aiops",
+    "root-cause-analysis",
+    "observability",
+    "sre",
+    "tool-use",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Natural Language :: Chinese (Simplified)",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: System :: Systems Administration",
+]
+
+# ---- 运行时依赖（M0/M1 只需要这些，保持精简）----
+dependencies = [
+    "litellm>=1.0",           # 一个接口通 100+ 家模型，方便做模型路由对比
+    "pydantic>=2.9",          # 结构化输出的核心武器，不是配菜
+    "pydantic-settings>=2.6", # 配置与环境变量统一收口
+    "typer>=0.15",            # CLI
+    "rich>=13.9",             # 终端输出
+    "python-dotenv>=1.0",     # 读取 .env
+]
+
+[project.optional-dependencies]
+# M2 才会用到（把 mock 系统做成真正的 HTTP 服务）
+mock = ["fastapi>=0.115", "uvicorn>=0.32"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[project.scripts]
+fivewhys = "fivewhys.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/YOUR_GITHUB/fivewhys"
+Issues = "https://github.com/YOUR_GITHUB/fivewhys/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fivewhys"]
+
+# ---------------- 工具链配置 ----------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+ignore_missing_imports = true
