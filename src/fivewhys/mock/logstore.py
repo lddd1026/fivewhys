@@ -6,7 +6,6 @@ M1 用纯内存 + JSONL 持久化，不引入数据库。
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from pathlib import Path
 

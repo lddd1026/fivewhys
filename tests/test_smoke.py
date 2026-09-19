@@ -89,10 +89,14 @@ def test_diagnosis_roundtrip() -> None:
                 depth=1,
                 question="为什么错误率飙升？",
                 answer="请求超时",
-                evidence=[Evidence(source="query_logs(order-service)", finding="大量 deadline exceeded")],
+                evidence=[
+                    Evidence(source="query_logs(order-service)", finding="大量 deadline exceeded")
+                ],
             )
         ],
-        evidence=[Evidence(source="query_logs(order-service)", finding="connection wait time 飙升")],
+        evidence=[
+            Evidence(source="query_logs(order-service)", finding="connection wait time 飙升")
+        ],
         ruled_out=["下游 inventory-service 无异常日志"],
         suggested_fix="回滚配置",
         summary="连接池耗尽",
