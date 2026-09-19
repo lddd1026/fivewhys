@@ -20,10 +20,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # --------------------------------------------------------------------------
 # 枚举
@@ -96,7 +95,7 @@ class WhyStep(BaseModel):
     """5 Whys 链条中的一层。"""
 
     depth: int = Field(ge=1, le=10, description="第几层追问，从 1 开始")
-    question: str = Field(description='追问，形如「为什么 X 会发生？」')
+    question: str = Field(description="追问，形如「为什么 X 会发生？」")
     answer: str = Field(description="这一步得出的答案")
     evidence: list[Evidence] = Field(default_factory=list)
 
