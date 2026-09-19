@@ -8,7 +8,9 @@
 
 ## 进行中
 
-（空）
+- [~] **FIV-1** 实现 `db_pool_exhausted` 故障注入 · `P0` · 约 2h
+  - 分支：`feat/FIV-1-inject-db-pool`
+  - 涉及：`src/fivewhys/mock/scenarios.py`、`src/fivewhys/mock/service.py`、`tests/test_smoke.py`
 
 ---
 
@@ -17,10 +19,6 @@
 ### M1 · 端到端最细竖切（当前里程碑）
 
 目标：一个假服务、一种故障、一个工具，agent 能诊断出来。
-
-- [ ] **FIV-1** 实现 `db_pool_exhausted` 故障注入 · `P0` · 约 2h
-  - 涉及：`src/fivewhys/mock/scenarios.py`
-  - 详见下方「任务详情」
 
 - [ ] **FIV-2** 实现 `query_logs` 工具 · `P0` · 约 2h
   - 涉及：`src/fivewhys/tools/query_logs.py`
