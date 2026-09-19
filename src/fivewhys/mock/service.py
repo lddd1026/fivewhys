@@ -61,6 +61,16 @@ class MockService:
     def new_trace_id(self) -> str:
         return f"{self._rng.getrandbits(48):012x}"
 
+    @property
+    def rng(self) -> random.Random:
+        """暴露随机源，供故障注入器使用。
+
+        为什么用 property 而不是让外部直接碰 ``_rng``：
+        私有属性一旦被别的模块依赖，以后就改不动了。开一个明确的入口，
+        既表达了「这是给你用的」，也留下了将来换实现的余地。
+        """
+        return self._rng
+
     # ---- 正常流量 ----
 
     def normal_operation(

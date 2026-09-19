@@ -213,19 +213,64 @@ def test_mock_service_is_reproducible() -> None:
 
 
 # --------------------------------------------------------------------------
-# M1 的 TODO —— 实现完成后删掉 skip 标记
+# FIV-1 · 故障注入
 # --------------------------------------------------------------------------
 
 
-def test_inject_db_pool_exhausted_not_implemented_yet() -> None:
-    """M1-2 完成后，把这个测试改成真正的断言。"""
+def test_inject_db_pool_exhausted() -> None:
+    """FIV-1 验收：故障注入正确，且日志不泄漏答案。"""
     store = LogStore()
     service = MockService("order-service", store)
-    start = datetime(2026, 1, 1, 14, 30, tzinfo=UTC)
+    start = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 
-    try:
-        inject_db_pool_exhausted(store, service, start)
-    except NotImplementedError:
-        pass
-    else:  # pragma: no cover
-        raise AssertionError("M1-2 尚未实现，这个测试应该先失败")
+    n_normal = service.normal_operation(start, start + timedelta(minutes=30))
+    normal_msgs = [e.message for e in store.all()]
+    assert n_normal > 0
+
+    fault_at = start + timedelta(minutes=30)
+    gt = inject_db_pool_exhausted(store, service, fault_at)
+
+    # 按数量切片拿到注入产生的那部分。
+    # 不能按时间过滤（e.ts >= fault_at）—— 配置重载那条在 fault_at 前 2 秒，
+    # 会被漏掉，而「不泄漏答案」的断言必须覆盖全部注入日志。
+    injected = store.all()[n_normal:]
+    assert len(injected) > 0
+
+    # --- ground truth 正确 ---
+    assert gt.fault_category is FaultCategory.DB_POOL_EXHAUSTED
+    assert gt.root_cause_service == "order-service"
+    assert gt.injected_at == fault_at
+    assert gt.match_keywords
+
+    # --- 错误数量落在合理区间 ---
+    errors = [e for e in injected if e.level == LogLevel.ERROR]
+    assert 10 <= len(errors) <= 30
+
+    # --- 时间戳不减（排序写入保证了这一点）---
+    timestamps = [e.ts for e in injected]
+    assert timestamps == sorted(timestamps)
+
+    # --- 故障期间仍有正常流量，否则 agent 一眼就看出来 ---
+    info_during_fault = [e for e in injected if e.level == LogLevel.INFO]
+    assert len(info_during_fault) > 1
+
+    # --- 没有污染注入前的日志 ---
+    assert [e.message for e in store.all()[:n_normal]] == normal_msgs
+
+    # --- ⭐ 核心约束：日志不得泄漏答案 ---
+    text = " ".join(e.message.lower() for e in injected)
+    assert "pool" not in text
+    assert "exhaust" not in text
+
+
+def test_injection_is_reproducible() -> None:
+    """同一个 seed 跑两次必须完全一致 —— 这是评测的前提。"""
+    start = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
+
+    def build() -> list[str]:
+        store = LogStore()
+        svc = MockService("order-service", store)
+        inject_db_pool_exhausted(store, svc, start)
+        return [e.model_dump_json() for e in store.all()]
+
+    assert build() == build()
