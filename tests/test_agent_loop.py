@@ -19,7 +19,7 @@ from fivewhys.config import Settings
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.scenarios import inject_db_pool_exhausted
 from fivewhys.mock.service import MockService
-from fivewhys.tools import ToolRegistry, build_registry
+from fivewhys.tools import DataSource, ToolRegistry, build_registry
 
 T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 FAULT_AT = T0 + timedelta(minutes=5)
@@ -32,7 +32,7 @@ def _registry() -> ToolRegistry:
     service = MockService("order-service", store)
     service.normal_operation(T0, FAULT_AT)
     inject_db_pool_exhausted(store, service, FAULT_AT)
-    return build_registry(store)
+    return build_registry(DataSource.logs_only(store))
 
 
 def _settings(**overrides: object) -> Settings:
@@ -121,7 +121,7 @@ async def test_invalid_json_arguments_are_fed_back() -> None:
 
 async def test_unknown_tool_name_is_fed_back() -> None:
     """模型可能编造工具名 —— 报错信息要能帮它纠正，而不是让诊断崩掉。"""
-    llm = ScriptedLLM([call("query_metrics", {"service": "order-service"}), submit()])
+    llm = ScriptedLLM([call("query_traces", {"service": "order-service"}), submit()])
     run = await diagnose(
         scenario_id="s1", question=QUESTION, registry=_registry(), llm=llm, settings=_settings()
     )

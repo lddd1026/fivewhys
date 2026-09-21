@@ -37,7 +37,7 @@ from fivewhys.mock.scenarios import inject_db_pool_exhausted  # noqa: E402
 from fivewhys.mock.service import MockService  # noqa: E402
 from fivewhys.models import AgentRun, GroundTruth  # noqa: E402
 from fivewhys.scoring import PASS_THRESHOLD, score_diagnosis  # noqa: E402
-from fivewhys.tools import build_registry  # noqa: E402
+from fivewhys.tools import DataSource, build_registry  # noqa: E402
 
 console = Console()
 
@@ -141,7 +141,7 @@ async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
     run = await diagnose(
         scenario_id=truth.scenario_id,
         question=question,
-        registry=build_registry(store),
+        registry=build_registry(DataSource.logs_only(store)),
         settings=get_settings(),
     )
 
