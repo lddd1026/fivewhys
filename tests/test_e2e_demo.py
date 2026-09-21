@@ -167,6 +167,55 @@ def test_demo_fails_cleanly_without_api_key(tmp_path: Path) -> None:
     assert "Traceback" not in result.stdout
 
 
+def test_demo_stops_at_the_total_budget() -> None:
+    """⭐ 总预算闸门（上线前审查 PRE-7）。
+
+    单次诊断有 $0.10 硬上限，但 `--runs 100` 原先没有任何全局保险丝 ——
+    花的是用户的钱，必须有个「到这儿就停」的地方。
+    保险丝装在知道还要跑几次的地方，也就是这里。
+    """
+    with fake_llm_server() as base_url:
+        result = _run_demo(base_url, "--runs", "5", "--max-total-usd", "0")
+
+    assert result.returncode == 1
+    assert "达到总预算" in result.stdout
+
+
+def _load_demo_module() -> object:
+    """把 ``scripts/demo_m1.py`` 当模块加载（它不是包的一部分）。"""
+    import importlib.util
+
+    path = PROJECT_ROOT / "scripts" / "demo_m1.py"
+    spec = importlib.util.spec_from_file_location("demo_m1_for_tests", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_demo_does_not_claim_a_verdict_on_partial_runs() -> None:
+    """只跑了一部分时**不判定通过** —— 拿不完整的数据下结论就是假数字。
+
+    判定逻辑抽成了纯函数 `judge()`，所以这里可以直接测各种组合，
+    不需要真花钱把预算跑超（假 LLM 服务的成本是 0，
+    在它上面永远走不到「跑了一部分就超预算」那条路）。
+    """
+    demo = _load_demo_module()
+
+    assert demo.judge(passed=5, attempted=5, planned=5)[0] is True
+    assert demo.judge(passed=3, attempted=5, planned=5)[0] is True, "3/5 是判定线"
+
+    ok, why = demo.judge(passed=2, attempted=5, planned=5)
+    assert ok is False and "未通过" in why
+
+    ok, why = demo.judge(passed=2, attempted=2, planned=5)
+    assert ok is False, "只跑了 2 次却说通过 = 编数字"
+    assert "未跑满" in why and "不构成验收结论" in why
+
+    ok, why = demo.judge(passed=0, attempted=0, planned=5)
+    assert ok is False and "一次都没跑" in why
+
+
 def test_demo_reports_failure_when_model_is_useless() -> None:
     """模型什么都不做时，判定必须是「未通过」而不是崩溃。
 
