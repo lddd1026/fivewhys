@@ -13,7 +13,9 @@
 
 ## 进行中
 
-（空）
+- [~] **FIV-3** 把 `query_logs` 注册进 registry 并写单测 · `P0` · 约 1h
+  - 分支：`feat/FIV-3-build-registry`
+  - 涉及：`src/fivewhys/tools/__init__.py`、`tests/test_tool_registry.py`
 
 ---
 
@@ -23,12 +25,9 @@
 
 目标：一个假服务、一种故障、一个工具，agent 能诊断出来。
 
-- [ ] **FIV-3** 把 `query_logs` 注册进 registry 并写单测 · `P0` · 约 1h
-  - 涉及：`src/fivewhys/tools/__init__.py`、`tests/`
-
 - [ ] **FIV-4** 实现 agent 主循环 · `P0` · 约 4h
   - 涉及：`src/fivewhys/agent/loop.py`
-  - 前置：需要 `.env` 里配好 `DEEPSEEK_API_KEY`
+  - **实现要点**：LLM 调用必须可替换（依赖注入），这样循环逻辑能脱离 API Key 测试
 
 - [ ] **FIV-5** 端到端手工验证 M1 · `P0` · 约 2h
   - 涉及：`scripts/demo_m1.py`（新建）
