@@ -18,6 +18,7 @@ from rich.table import Table
 
 from fivewhys import __version__
 from fivewhys.config import get_settings
+from fivewhys.logs import configure_logging
 from fivewhys.mock.injectors import available, catalogue
 from fivewhys.models import FaultCategory
 from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_scenario
@@ -38,6 +39,24 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+VERBOSE = False
+
+
+@app.callback()
+def main_callback(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="打印调试日志（含完整异常堆栈）",
+    ),
+) -> None:
+    """fivewhys —— agent 驱动的根因分析。"""
+    global VERBOSE
+    VERBOSE = verbose
+    configure_logging(verbose=verbose)
+
 
 # provider 前缀 -> 需要的环境变量名
 PROVIDER_API_KEYS: dict[str, str] = {

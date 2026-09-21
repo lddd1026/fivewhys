@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     # 单次诊断最多多少轮工具调用（兜底，防止死循环）
     max_steps: int = 20
 
+    # 单次 LLM 请求的超时（秒）。
+    #
+    # ⚠️ 这不是「优化」，是**有界性**：litellm 自己的默认超时是 600 秒，
+    # 乘以 max_steps=20 就是最多 3 小时。provider 挂死（连上了、不回包）时，
+    # 命令行会一直僵在那里，用户只能 Ctrl+C。
+    # 上线前实测：一个「收了请求不回应」的假服务能让调用一直等下去（20 秒未返回）。
+    llm_timeout_s: float = 60.0
+
     # 温度。0 是为了让诊断尽量可复现
     temperature: float = 0.0
 
