@@ -182,6 +182,14 @@ class AgentRun(BaseModel):
 
     scenario_id: str
     model: str
+    served_model: str | None = Field(
+        default=None,
+        description=(
+            "provider 实际上服务的模型名。实测可以不等于 ``model``"
+            "（请求 deepseek/deepseek-chat，回 deepseek-flash）。"
+            "约束 C-7：报告里的数字必须能说清「真正跑的是哪个模型」"
+        ),
+    )
     # 这次运行的标识。轨迹落在 runs/<run_id>/trace.jsonl（需求 FR-9）。
     run_id: str = ""
     trace_path: str | None = Field(

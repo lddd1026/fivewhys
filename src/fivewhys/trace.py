@@ -206,6 +206,9 @@ class TraceWriter:
                 "total_cost_usd": run.total_cost_usd,
                 "total_tokens": run.total_tokens,
                 "duration_s": run.duration_s,
+                # provider 实际服务的模型名。放在 finish 而不是 start：
+                # 只有调用过一次才知道它是什么，而 start 写在第一次调用**之前**。
+                "served_model": run.served_model,
                 "diagnosis": final.model_dump(mode="json") if final else None,
             },
         )
@@ -278,6 +281,8 @@ def summarize(path: Path) -> dict[str, Any]:
         "scenario_id": start.get("scenario_id"),
         "question": start.get("question"),
         "model": start.get("model"),
+        # 为空说明这次没跑到一次成功调用（例如一开始就鉴权失败）
+        "served_model": finish.get("served_model"),
         "steps": len(responses),
         "tool_calls": len(tools),
         "failed_tool_calls": sum(1 for t in tools if not t.get("ok")),

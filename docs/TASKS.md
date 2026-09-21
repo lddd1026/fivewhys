@@ -13,7 +13,8 @@
 
 ## 进行中
 
-（空。M1 已完成，下一个任务：**FIV-16** litellm 多模型接入，见 M5。）
+（空。M5 已收尾：FIV-19 / 19b / 17 / 18 / 16 全部完成。
+下一个任务：**FIV-20** 评测执行器（M6 评测台，见下方 M6 章节）。）
 
 ---
 
@@ -159,7 +160,33 @@
   - `fivewhys trace latest` 看某一次诊断的每一步
 - [x] FIV-17 结构化输出校验 + 证据来源校验 · ✅ 已完成
 - [x] FIV-18 终止条件（5 Whys 深度 / max_steps / max_cost / max_tokens） · ✅ 已完成
-- [ ] FIV-16 litellm 多模型接入 · `P0`
+- [x] **FIV-16 litellm 多模型接入** · ✅ 已完成
+  - 新增 `src/fivewhys/providers.py`：查 litellm **本地表**（离线、不花钱）得到
+    窗口 / 价格 / key 变量名；`describe_model()` **不抛异常**，未知就返回 `known=False`
+  - **上下文闸门从固定 60k 改为按模型窗口算**（× 80%）。实测窗口差 8 倍
+    （deepseek-chat 131,072 / gpt-4o-mini 128,000 / gemini-2.0-flash 1,048,576）——
+    固定值会让 gemini 在**只用了 5.7% 窗口**时停下，并给出一句不成立的解释
+  - `fivewhys doctor --model <名字>`：花钱之前回答「名字认不认识 / 窗口多大 /
+    闸门多少 / key 放哪个变量」
+  - **记 provider 实际服务的模型名**（约束 C-7）：`AgentRun.served_model`
+    + 轨迹 `finish` 事件；实测请求 `deepseek/deepseek-chat` 时对方回
+    `deepseek-flash`，报表和 `fivewhys trace` 两个都打
+  - 顺手修掉两个噪声/静默缺陷：
+    ① 模型名不认识时 litellm 用 `print()` 甩两行红色 `Provider List: ...`
+    （不走 logging），正好盖在 `doctor --model` 的警告上 —— 加了回归测试
+    断言 stdout/stderr 必须为空；
+    ② **`.env.example` 里写的是 `FIVEWHYS_MODEL`，而真正的变量名是
+    `FIVEWHYS_LLM_MODEL`** —— 多一个少一个词都不报错，pydantic 只是静默忽略，
+    于是「照文档改了模型却还在用旧的」，而所有指标都跟着错。加了机器检查：
+    `.env.example` 里每个 `FIVEWHYS_*` 都必须是 `Settings` 真的认得的字段
+  - 顺带记一条坑（写进 DEV.md）：`import litellm` 自己会 `load_dotenv`，
+    于是**被删掉的环境变量会被重新灌回来**。测试里模拟「没配 key」要用
+    `setenv("", …)` 而不是 `delenv()` —— 这条是 `doctor` 的 FR-14a 测试变红才发现的
+  - 验收：`tests/test_providers.py` 19 个测试。关键那条是**同一份 200k 字符的
+    prompt**：未知窗口的模型被拦（`max_tokens`，且**一次请求都没发**），
+    `gemini-2.0-flash` 正常跑完 —— 写死闸门做不到这件事
+  - 真实运行（1 次）：100 分 / `max_why_depth` / 8 次工具调用 / $0.0031 / 13.2s /
+    49,126 token，`实际模型: deepseek-flash（请求的是 deepseek/deepseek-chat）`
 
 > **为什么先做 FIV-19（不是按列表顺序）**：审查报告 P1-8 那条「至今没查明原因的
 > 失败」就是因为没有轨迹；而且**要验证 FIV-17「编造的 evidence 会被拒绝」，
@@ -191,6 +218,20 @@
 ---
 
 ## 已完成
+
+- [x] **FIV-16** 多模型接入（M5 最后一个） · 已完成
+  - 验收：`tests/test_providers.py` 19 个新测试 + `test_cli.py` 4 个，全套 **507 passed**（+23）
+  - **修的是一个「代码没错、测试全绿」的缺陷**：错的是那个写死的 60k。
+    单模型下看不出问题，换模型时错一个数量级（gemini 只用了 5.7% 窗口就被停）。
+    详见 REQUIREMENTS §12.6
+  - 新增能力：`describe_model()`（离线查窗口 / 价格 / key 变量名，**不抛异常**）、
+    `doctor --model`、`demo_m1.py --model`、`AgentRun.served_model`
+  - 关键测试是**行为**断言而非单元断言：同一份 200k 字符 prompt，
+    未知窗口的模型被提前拦住（`stop_reason=max_tokens`，且 `llm.rounds == 0`
+    —— 一次请求都没发出去），`gemini-2.0-flash` 正常跑完
+  - 顺带修掉：模型名写错时 litellm 用 `print()`（不走 logging）甩两行红色
+    `Provider List: ...`，正好盖在 `doctor --model` 的警告上。加了回归测试
+    断言 stdout/stderr 必须为空
 
 - [x] **FIV-18** 终止条件补齐（M5） · 已完成
   - 验收：8 个新测试，全套 484 passed（+8）

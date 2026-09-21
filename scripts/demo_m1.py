@@ -9,8 +9,9 @@
     python scripts/demo_m1.py --runs 3
     python scripts/demo_m1.py --trace         # 打印每一轮的推理轨迹
     python scripts/demo_m1.py --offline       # 不调 LLM，只看场景长什么样
+    python scripts/demo_m1.py --model gpt-4o-mini   # 换模型，不改 .env（FIV-16）
 
-前置：``.env`` 里配好 ``DEEPSEEK_API_KEY``
+前置：``.env`` 里配好对应的 API Key（``fivewhys doctor`` 会告诉你该设哪个变量）
 
 **这是唯一需要联网和花钱的一步。** 其余测试全部离线可跑。
 
@@ -41,9 +42,10 @@ from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 from fivewhys.agent import diagnose  # noqa: E402
-from fivewhys.config import get_settings  # noqa: E402
+from fivewhys.config import Settings, get_settings  # noqa: E402
 from fivewhys.logs import configure_logging  # noqa: E402
 from fivewhys.models import AgentRun, FaultCategory  # noqa: E402
+from fivewhys.providers import api_key_env_for, describe_model  # noqa: E402
 from fivewhys.scenario import Scenario  # noqa: E402
 from fivewhys.scenario import build_scenario as build_full_scenario  # noqa: E402
 from fivewhys.scoring import PASS_THRESHOLD, score_diagnosis  # noqa: E402
@@ -52,14 +54,6 @@ from fivewhys.tools import DataSource, build_registry  # noqa: E402
 console = Console()
 
 T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
-
-API_KEY_BY_PROVIDER = {
-    "deepseek": "DEEPSEEK_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
 
 
 # --------------------------------------------------------------------------
@@ -190,7 +184,7 @@ def explain_failure(run: AgentRun) -> str:
     lowered = detail.lower()
 
     if "401" in lowered or "authentication" in lowered or "api key" in lowered:
-        hint = "API Key 不对或已失效 —— 检查 .env 里的 DEEPSEEK_API_KEY"
+        hint = "API Key 不对或已失效 —— 检查 .env 里的 key（变量名看 `fivewhys doctor`）"
     elif "429" in lowered or "rate limit" in lowered:
         hint = "被限流了 —— 等一会儿再跑，或把 --runs 调小"
     elif "timeout" in lowered or "timed out" in lowered:
@@ -205,13 +199,13 @@ def explain_failure(run: AgentRun) -> str:
     return f"{run.stop_reason}：{detail[:120]} —— {hint}" if detail else f"{run.stop_reason}"
 
 
-async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
+async def run_one(seed: int, trace: bool, settings: Settings) -> tuple[AgentRun, float, list[str]]:
     scenario = make_scenario(seed)
     run = await diagnose(
         scenario_id=scenario.scenario_id,
         question=scenario.question,
         registry=build_registry(DataSource.from_scenario(scenario)),
-        settings=get_settings(),
+        settings=settings,
     )
 
     # 注意参数名叫 trace 而不是 show_trace ——
@@ -272,6 +266,11 @@ async def main() -> int:
     )
     parser.add_argument("--trace", action="store_true", help="打印工具调用轨迹")
     parser.add_argument("--offline", action="store_true", help="不调 LLM，只展示场景")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="换一个模型跑（litellm 的 provider/model 格式），不改 .env",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="打印调试日志（含堆栈）")
     args = parser.parse_args()
 
@@ -279,13 +278,23 @@ async def main() -> int:
     configure_logging(verbose=args.verbose)
 
     settings = get_settings()
+    if args.model:
+        # 用 model_copy 而不是改环境变量：这次覆盖只作用于本进程，
+        # 不污染 .env，也不影响同一台机器上别的运行。
+        settings = settings.model_copy(update={"llm_model": args.model})
 
     if args.offline:
         show_offline(make_scenario(0))
         return 0
 
-    provider = settings.llm_model.split("/", 1)[0]
-    key_name = API_KEY_BY_PROVIDER.get(provider)
+    key_name = api_key_env_for(settings.llm_model)
+    # 模型不认识时也提醒一句：与其等到 401/404，不如现在说清「名字可能不对」
+    info = describe_model(settings.llm_model)
+    if not info.known:
+        console.print(
+            f"[yellow]{settings.llm_model} 不在 litellm 本地表里[/yellow]"
+            " —— 名字可能写错了（先用 `fivewhys doctor --model ...` 确认）"
+        )
     if key_name and not os.environ.get(key_name):
         console.print(f"[red]缺少 {key_name}[/red]")
         console.print("把 key 填进 .env 再跑：")
@@ -309,6 +318,9 @@ async def main() -> int:
     total_tokens = 0
     attempted = 0
     traces: list[str] = []
+    # provider 实际服务的模型名（约束 C-7）。可能不等于请求的那个 —— 实测
+    # 请求 deepseek/deepseek-chat 时对方回 deepseek-flash。**报告里必须写真实的那个。**
+    served: set[str] = set()
 
     for index in range(args.runs):
         # ---- 总预算闸门（上线前审查 PRE-7）----
@@ -330,12 +342,14 @@ async def main() -> int:
             console.print("[dim]要跑完就调大 --max-total-usd；先确认花的钱是你能接受的。[/dim]")
             break
 
-        run, points, notes = await run_one(index, args.trace)
+        run, points, notes = await run_one(index, args.trace, settings)
         attempted += 1
         ok = points >= PASS_THRESHOLD
         passed += int(ok)
         total_cost += run.total_cost_usd
         total_tokens += run.total_tokens
+        if run.served_model:
+            served.add(run.served_model)
         if run.trace_path:
             traces.append(run.trace_path)
 
@@ -363,12 +377,21 @@ async def main() -> int:
         return 1
 
     incomplete = attempted < args.runs
+
     verdict, verdict_text = judge(passed, attempted, args.runs)
     console.print(
         f"  通过 [bold]{passed}/{attempted}[/bold]"
         + (f"（计划 {args.runs} 次，预算中止）" if incomplete else "")
         + f"  （判定线 {PASS_THRESHOLD:.0%}）  总成本 ${total_cost:.4f}"
     )
+    # 约束 C-7：这个数字是要写进 README 的，所以必须标清「真正跑的是哪个模型」。
+    # 只报请求名等于在报告里写了一个没跑过的模型。
+    if served:
+        actual = "、".join(sorted(served))
+        suffix = ""
+        if actual != settings.llm_model:
+            suffix = f"  [dim]（请求的是 {settings.llm_model}）[/dim]"
+        console.print(f"  实际模型  : {actual}{suffix}")
     console.print(
         f"[green]{verdict_text}[/green]"
         if verdict
