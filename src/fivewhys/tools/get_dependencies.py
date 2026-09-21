@@ -36,7 +36,7 @@ class GetDependenciesArgs(BaseModel):
 
     service: str | None = Field(
         default=None,
-        description="服务名。不传就返回完整拓扑图（一眼看清整个系统怎么连的）",
+        description="服务名，例如 order-service。不传就返回完整拓扑图（一眼看清整个系统怎么连的）",
     )
 
 
@@ -110,11 +110,15 @@ def build_get_dependencies_tool(topology: dict[str, list[str]]) -> Tool:
         name="get_dependencies",
         description=(
             "查询服务的调用依赖：它调用了谁（下游）、谁调用了它（上游）；"
-            "不传服务名则返回完整拓扑图。"
-            "典型用法：当某个服务的日志显示「调用下游失败」时，"
-            "用这个工具确认下游到底是谁、以及下游还有没有自己的下游，"
-            "顺着调用链一路追到真正的根因服务。"
-            "症状在上游、根因在下游，是分布式故障最常见的样子。"
+            "不传服务名则返回完整拓扑图。\n"
+            "**在排障路径上没有固定位置**：任何时候需要确认「谁调用谁」都可以用，"
+            "最典型的时机是日志显示「调用下游失败」的时候。\n"
+            "**症状在上游、根因在下游，是分布式故障最常见的样子**："
+            "用它确认下游是谁、下游还有没有自己的下游，"
+            "顺着调用链一路追到真正的根因服务。\n"
+            "局限：它只给「谁调用谁」，**不含任何流量或错误数据** —— "
+            "想知道下游健不健康，要另外查下游的指标和日志。\n"
+            '典型调用：get_dependencies(service="order-service")'
         ),
         args_model=GetDependenciesArgs,
         func=_deps,

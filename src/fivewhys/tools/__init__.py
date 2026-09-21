@@ -37,6 +37,17 @@ if TYPE_CHECKING:
     from fivewhys.mock.metrics import MetricStore
     from fivewhys.scenario import Scenario
 
+# 工具说明书（描述 + 参数描述）的字符总量上限。
+#
+# 为什么这是工具层的事，而不是文档的事：说明书写在**每一次**请求的提示词里。
+# 一个 30 步的诊断会把它原样发 30 遍 —— 多写 1000 字，一次诊断就多花约 1 万 token。
+# 成本红线（NFR-2）最终就落在这些字上。
+#
+# 当前实际约 2100 字，留了余量给「再加一两个工具」。真到顶了，
+# 该做的是删废话，而不是调高这个数 —— 调高等于把成本问题挪到看不见的地方。
+# 用 `python scripts/review_tool_descriptions.py` 看当前用量。
+TOOL_DESCRIPTION_BUDGET_CHARS = 3000
+
 
 @dataclass(frozen=True)
 class DataSource:
@@ -206,4 +217,10 @@ def build_registry(source: DataSource) -> ToolRegistry:
     return registry
 
 
-__all__ = ["DataSource", "Tool", "ToolRegistry", "build_registry"]
+__all__ = [
+    "DataSource",
+    "TOOL_DESCRIPTION_BUDGET_CHARS",
+    "Tool",
+    "ToolRegistry",
+    "build_registry",
+]

@@ -19,7 +19,12 @@ from pydantic import ValidationError
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.scenarios import inject_db_pool_exhausted
 from fivewhys.mock.service import MockService
-from fivewhys.tools import DataSource, ToolRegistry, build_registry
+from fivewhys.tools import (
+    TOOL_DESCRIPTION_BUDGET_CHARS,
+    DataSource,
+    ToolRegistry,
+    build_registry,
+)
 
 T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 FAULT_AT = T0 + timedelta(minutes=10)
@@ -83,20 +88,6 @@ def test_specs_are_valid_openai_function_schemas() -> None:
         params = function["parameters"]
         assert params["type"] == "object"
         assert params["properties"], f"{function['name']} 没有参数"
-
-
-def test_every_tool_description_teaches_a_method() -> None:
-    """工具描述不只是「这个工具干什么」，还要教**什么时候用它**。
-
-    这是需求 FR-5 的隐含要求：agent 面对 5 个工具，得知道先查哪个。
-    描述里没有「先 / 第一步 / 典型用法」这类指引的工具，等于把选择难题丢给模型。
-    """
-    hints = ("先", "第一步", "典型用法", "用法", "如果")
-    for spec in _registry().specs():
-        description = spec["function"]["description"]
-        assert any(hint in description for hint in hints), (
-            f"{spec['function']['name']} 的描述没教方法：{description}"
-        )
 
 
 def test_query_logs_schema_declares_the_core_arguments() -> None:
@@ -215,3 +206,165 @@ def test_data_source_reports_services_from_topology_first() -> None:
         topology={"a": [], "b": ["a"], "c": ["b"]},
     )
     assert with_topology.services == ["a", "b", "c"]
+
+
+# --------------------------------------------------------------------------
+# FIV-14：工具说明书的质量
+#
+# 说明书就是提示词的一部分，而且是**每次请求都发**的那部分。
+# 下面这些断言把「描述该写什么」变成机器可检查的规矩：
+# 位置、局限、典型调用、没有废话、总量有预算。
+# --------------------------------------------------------------------------
+
+
+def test_exactly_one_tool_claims_to_be_the_first_step() -> None:
+    """⭐ 只能有一个「第一步」。
+
+    这条是 FIV-14 通读说明书时发现的真问题：``query_metrics`` 和 ``query_logs``
+    都写着「排障的第一步通常就是它」—— 模型没法同时听两个人的。
+    两个工具都说自己是第一步，等于都没说。
+    """
+    names = [
+        spec["function"]["name"]
+        for spec in _registry().specs()
+        if "第一步" in spec["function"]["description"]
+    ]
+    assert names == ["query_metrics"], f"说自己是第一步的工具：{names}"
+
+
+def test_every_description_states_its_place_in_the_path() -> None:
+    """每个工具都要说清自己在排障路径上的位置 —— 模型才知道先查哪个。
+
+    允许「没有固定位置」这类回答：``get_dependencies`` 确实不属于任何一步，
+    但**必须明说**，而不是含糊过去。
+    """
+    markers = ("第一步", "第二步", "第三步", "第四步", "第五步", "两个用法", "没有固定位置")
+    for spec in _registry().specs():
+        description = spec["function"]["description"]
+        assert any(marker in description for marker in markers), (
+            f"{spec['function']['name']} 没说清自己在排障路径上的位置"
+        )
+
+
+def test_every_description_states_a_limitation() -> None:
+    """每个工具都要说清**什么时候不该用它**。
+
+    「这个工具能干什么」模型猜得出来，「它查不到什么」猜不出来 ——
+    而排错路的代价（多花几步、甚至排除掉真正的原因）要大得多。
+    """
+    for spec in _registry().specs():
+        description = spec["function"]["description"]
+        assert "局限" in description, f"{spec['function']['name']} 没写局限"
+
+
+def test_every_description_has_a_typical_call() -> None:
+    """每个工具都要给一条**典型调用**，把参数形态摆出来。
+
+    模型看得到 schema，但看不到「一个真实调用长什么样」——
+    时间是 ISO 8601 还是 unix 时间戳？服务名是短名还是全名？
+    一条例子比三段解释省字。
+    """
+    for spec in _registry().specs():
+        name = spec["function"]["name"]
+        description = spec["function"]["description"]
+        assert "典型调用" in description, f"{name} 没给典型调用"
+        assert f"{name}(" in description, f"{name} 的典型调用里没写出工具名"
+
+
+def test_descriptions_have_no_vague_filler() -> None:
+    """描述里不许出现含糊词。
+
+    「之类」「等等」这类词在给人看的文档里没问题，给模型看就是噪声：
+    它不知道边界在哪，只能靠猜。写具体值比写「等等」既省字又准确。
+    """
+    vague = ("之类", "等等", "等，", "等）", "一些", "若干", "大致", "可能可以")
+    for spec in _registry().specs():
+        description = spec["function"]["description"]
+        found = [word for word in vague if word in description]
+        assert found == [], f"{spec['function']['name']} 的描述里有含糊词：{found}"
+
+
+def test_tool_descriptions_fit_the_prompt_budget() -> None:
+    """NFR-2：说明书总量有上限。
+
+    工具说明书写在每一次请求的提示词里，一个 30 步的诊断会原样发 30 遍。
+    这条测试红了不要直接调高预算 —— 先删废话。
+    """
+    specs = _registry().specs()
+    descriptions = sum(len(spec["function"]["description"]) for spec in specs)
+    parameters = sum(
+        len(prop.get("description", ""))
+        for spec in specs
+        for prop in spec["function"]["parameters"]["properties"].values()
+    )
+    total = descriptions + parameters
+
+    assert total <= TOOL_DESCRIPTION_BUDGET_CHARS, (
+        f"说明书共 {total} 字，超出预算 {TOOL_DESCRIPTION_BUDGET_CHARS}"
+        f"（描述 {descriptions} + 参数 {parameters}）—— 先删废话，别调预算"
+    )
+
+
+def test_every_parameter_description_explains_its_value() -> None:
+    """参数描述要说清取值形态 —— 它同样是提示词的一部分。"""
+    for spec in _registry().specs():
+        name = spec["function"]["name"]
+        for param, prop in spec["function"]["parameters"]["properties"].items():
+            description = prop.get("description", "")
+            assert len(description) >= 8, f"{name}.{param} 的参数描述太短或缺失：{description!r}"
+
+
+def test_time_parameters_say_iso_8601() -> None:
+    """时间参数的格式必须写明。
+
+    模型不知道我们收的是 ISO 8601 还是 unix 时间戳 ——
+    猜错的代价是一次失败的调用 + 一次重试（都是钱）。
+    """
+    for spec in _registry().specs():
+        name = spec["function"]["name"]
+        for param, prop in spec["function"]["parameters"]["properties"].items():
+            looks_like_time = "datetime" in str(prop.get("format", "")) or param in {
+                "start",
+                "end",
+                "at",
+                "since",
+            }
+            if looks_like_time:
+                assert "ISO 8601" in prop.get("description", ""), f"{name}.{param} 没写时间格式"
+
+
+# --------------------------------------------------------------------------
+# FIV-14：把「猜参数」变成「报错」
+# --------------------------------------------------------------------------
+
+
+def test_log_levels_are_an_inline_enum() -> None:
+    """日志级别必须是**内联枚举**，不能是 $ref。
+
+    内联枚举模型一眼看得到可选值；$ref 得靠调用方解析，各家模型支持程度不一。
+    """
+    spec = next(s for s in _registry().specs() if s["function"]["name"] == "query_logs")
+    items = spec["function"]["parameters"]["properties"]["levels"]["items"]
+
+    assert "$ref" not in items, "级别用了 $ref —— 模型可能解析不了"
+    assert items["enum"] == ["DEBUG", "INFO", "WARN", "ERROR"]
+
+
+def test_invalid_log_level_is_rejected_instead_of_silently_empty() -> None:
+    """写错级别要**报错**，不能静默返回空。
+
+    ``levels=["warning"]`` 以前是这样收场的：大小写被规整成 ``WARNING``，
+    和 ``WARN`` 对不上 → 过滤出 0 条 → 工具回一句「这个服务这段时间没有异常」。
+    **一次拼写错误被当成了「服务是健康的」** —— 这正是本项目一路上在防的
+    「静默地把错误当成结论」。现在它会变成一个 ValidationError，
+    被主循环喂回给模型，模型有机会自己改对。
+    """
+    tool = _registry().get("query_logs")
+
+    with pytest.raises(ValidationError):
+        tool(
+            service="order-service",
+            start=FAULT_AT,
+            end=FAULT_AT + timedelta(minutes=5),
+            levels=["warning"],
+        )

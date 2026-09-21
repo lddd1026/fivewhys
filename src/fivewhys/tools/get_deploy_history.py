@@ -41,11 +41,11 @@ class GetDeployHistoryArgs(BaseModel):
 
     service: str | None = Field(
         default=None,
-        description="服务名。不传就列出所有服务的发布记录（跨服务排查时有用）",
+        description="服务名，例如 order-service。不传就列出所有服务的发布记录",
     )
-    start: datetime | None = Field(default=None, description="时间窗口起点，不传则不限")
-    end: datetime | None = Field(default=None, description="时间窗口终点，不传则不限")
-    limit: int = Field(default=20, le=MAX_RECORDS, description="最多返回多少条")
+    start: datetime | None = Field(default=None, description="时间窗口起点（ISO 8601），不传则不限")
+    end: datetime | None = Field(default=None, description="时间窗口终点（ISO 8601），不传则不限")
+    limit: int = Field(default=20, le=MAX_RECORDS, description=f"最多返回多少条（1~{MAX_RECORDS}）")
 
 
 def build_get_deploy_history_tool(deploys: DeployStore, *, services: Sequence[str] = ()) -> Tool:
@@ -111,13 +111,14 @@ def build_get_deploy_history_tool(deploys: DeployStore, *, services: Sequence[st
     return Tool(
         name="get_deploy_history",
         description=(
-            "查询服务的发布记录（谁在什么时候发了哪个版本）。"
-            "**它有两个用法，同样重要**："
-            "一是找嫌疑 —— 如果故障开始的时间点紧跟一次发布，那这次发布很可疑；"
-            "二是排除嫌疑 —— 如果故障开始前很久都没有发布，就可以把发布排除掉，"
-            "不必再在这条路径上花时间。"
-            "注意：发布记录只说「发了什么版本」，**不说改了什么**；"
-            "想知道具体改了哪个配置项，用 get_config。"
+            "查询服务的发布记录（谁在什么时候发了哪个版本）。\n"
+            "**排障的第四步，两个用法同样重要**："
+            "找嫌疑 —— 故障开始的时间点紧跟一次发布，这次发布就很可疑；"
+            "排除嫌疑 —— 故障前很久都没有发布，就可以把发布彻底排除掉，别再花时间。\n"
+            "局限：发布记录只说「发了什么版本」，**不说改了什么** —— "
+            "想知道具体改了哪个配置项，必须用 get_config。\n"
+            '典型调用：get_deploy_history(service="order-service", '
+            'start="2026-01-01T14:00:00Z", end="2026-01-01T14:10:00Z")'
         ),
         args_model=GetDeployHistoryArgs,
         func=_history,
