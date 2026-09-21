@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -118,6 +119,40 @@ def test_doctor_fails_when_a_dependency_is_missing(monkeypatch: pytest.MonkeyPat
 
     assert result.exit_code == 1
     assert "硬性检查未通过" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# build-scenario
+# --------------------------------------------------------------------------
+
+
+def test_build_scenario_writes_a_package(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["build-scenario", "--seed", "1", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "场景已落盘" in result.stdout
+    assert "校验通过" in result.stdout
+
+    created = list(tmp_path.iterdir())
+    assert len(created) == 1, "应该只创建一个场景目录"
+    assert (created[0] / "scenario.json").exists()
+    assert (created[0] / "logs.jsonl").exists()
+    assert (created[0] / "metrics.jsonl").exists()
+
+
+def test_build_scenario_shows_the_question(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["build-scenario", "--seed", "0", "--out", str(tmp_path)])
+    assert "order-service 从" in result.stdout
+
+
+def test_build_scenario_is_reproducible(tmp_path: Path) -> None:
+    first, second = tmp_path / "a", tmp_path / "b"
+    runner.invoke(app, ["build-scenario", "--seed", "5", "--out", str(first)])
+    runner.invoke(app, ["build-scenario", "--seed", "5", "--out", str(second)])
+
+    manifest_a = next(first.iterdir()) / "scenario.json"
+    manifest_b = next(second.iterdir()) / "scenario.json"
+    assert manifest_a.read_text(encoding="utf-8") == manifest_b.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------

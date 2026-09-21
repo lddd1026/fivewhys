@@ -17,6 +17,7 @@ from rich.table import Table
 
 from fivewhys import __version__
 from fivewhys.config import get_settings
+from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_db_pool_scenario
 
 app = typer.Typer(
     name="fivewhys",
@@ -122,8 +123,47 @@ def doctor() -> None:
         console.print(f"\n[red]{hard_failures} 项硬性检查未通过，先解决它们。[/red]")
         raise typer.Exit(code=1)
 
-    console.print("\n[green]环境就绪。[/green] 下一步：实现 M1 的四个 TODO。")
-    console.print("[dim]见 docs/ROADMAP.md 的 M1 章节。[/dim]")
+    console.print("\n[green]环境就绪。[/green]")
+    console.print("[dim]下一步：fivewhys build-scenario 造一个场景，")
+    console.print("[dim]        然后 python scripts/demo_m1.py 跑诊断。[/dim]")
+
+
+@app.command("build-scenario")
+def build_scenario_cmd(
+    seed: int = typer.Option(0, "--seed", "-s", help="随机种子。同一个种子产出完全相同的场景"),
+    out: Path = typer.Option(  # noqa: B008 —— typer 的惯用写法
+        DEFAULT_SCENARIO_ROOT,
+        "--out",
+        "-o",
+        help="输出目录",
+    ),
+) -> None:
+    """构造一个评测场景并落盘。
+
+    落盘之后这个场景就是**一份文件**：谁跑、什么时候跑，结果都一样。
+    评测比的就是「同一批场景下 agent 表现如何」，所以场景必须固化下来。
+    """
+    scenario = build_db_pool_scenario(seed=seed)
+    target = scenario.save(out)
+
+    console.print(f"[green]场景已落盘[/green] {target}")
+    console.print()
+    console.print(f"  [bold]问题[/bold]     {scenario.question}")
+    console.print(f"  [bold]根因服务[/bold] {scenario.ground_truth.root_cause_service}")
+    console.print(f"  [bold]故障类别[/bold] {scenario.ground_truth.fault_category}")
+    console.print(
+        f"  [bold]数据[/bold]     日志 {len(scenario.logs)} 条 / 指标 {len(scenario.metrics)} 条"
+    )
+    console.print()
+
+    problems = scenario.validate()
+    if problems:
+        console.print("[red]场景校验未通过：[/red]")
+        for problem in problems:
+            console.print(f"  - {problem}")
+        raise typer.Exit(code=1)
+
+    console.print("[green]校验通过[/green]：日志未泄漏答案，question 未泄漏判分词")
 
 
 if __name__ == "__main__":
