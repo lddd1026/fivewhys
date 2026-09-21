@@ -73,6 +73,9 @@ addopts = "-q"
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# 排除 markdown：docs/ 里的代码示例是给人看的，注释对齐是刻意的，
+# 不希望被 ruff format 重排（它会把 `# 说明` 前面的空格压缩掉）。
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
