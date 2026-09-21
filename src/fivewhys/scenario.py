@@ -45,11 +45,11 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from fivewhys.mock.changes import ConfigStore, DeployStore
+from fivewhys.mock.injectors import InjectionContext, available, inject
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricStore
-from fivewhys.mock.scenarios import inject_db_pool_exhausted
 from fivewhys.mock.topology import MockSystem
-from fivewhys.models import GroundTruth
+from fivewhys.models import FaultCategory, GroundTruth
 
 MANIFEST_NAME = "scenario.json"
 LOGS_NAME = "logs.jsonl"
@@ -215,44 +215,72 @@ class Scenario:
 # --------------------------------------------------------------------------
 
 
-def build_db_pool_scenario(
+def build_question(category: FaultCategory, target: str, at: datetime) -> str:
+    """按需求 FR-15 生成题面：**给服务名和粗略时间，不给根因**。
+
+    ================  ==================================================
+    提供              不提供
+    ================  ==================================================
+    ✅ 服务名          ❌ 具体错误信息
+    ✅ 粗略时间（分钟） ❌ 精确时间窗口
+    ✅ 表面症状        ❌ 根因 / 故障类别
+    ================  ==================================================
+
+    ⚠️ 题面里写的是**被问的服务**（``target``），不是 ``root_cause_service``。
+
+    对 ``dependency_5xx`` 这类场景，两者**不是同一个**：题面问 order-service，
+    但根因在 inventory-service。写根因就等于把答案写在题面上。
+    """
+    if category is FaultCategory.NO_FAULT:
+        return f"有用户反馈 {target} 在 {at:%H:%M} 前后偶尔变慢，帮忙确认一下是不是真的有问题"
+    return f"{target} 从 {at:%H:%M} 前后开始错误率飙升，帮忙定位一下原因"
+
+
+def build_scenario(
+    category: FaultCategory = FaultCategory.DB_POOL_EXHAUSTED,
     *,
     seed: int = 0,
     base_time: datetime | None = None,
     warmup_minutes: int = 2,
     rps: float = 2.0,
+    target: str | None = None,
 ) -> Scenario:
-    """构造一个「连接池耗尽」场景并打包。
+    """构造任意类别的场景并打包。
 
-    ``question`` 的措辞遵循需求 FR-15：**给服务名和粗略时间，不给根因**。
+    Args:
+        category: 故障类别。见 ``fivewhys.mock.catalogue()``。
+        seed: 随机种子。同一个种子产出完全相同的场景（NFR-1）。
+        base_time: 时间线的起点。
+        warmup_minutes: 故障前先跑多久的正常流量。
+            **不能是 0** —— 没有正常基线，「什么时候开始坏的」就无从判断。
+        rps: 故障前的请求速率。
+        target: 题面里问哪个服务。默认入口服务（order-service）。
 
-        提供                 不提供
-        ─────────────────    ──────────────────
-        ✅ 服务名             ❌ 具体错误信息
-        ✅ 粗略时间（分钟）    ❌ 精确时间窗口
-        ✅ 表面症状           ❌ 根因 / 故障类别
+    Returns:
+        打包好的场景。
     """
     base = base_time or datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
     fault_at = base + timedelta(minutes=warmup_minutes)
+    asked_about = target or "order-service"
 
     logs = LogStore()
     system = MockSystem(logs, seed=seed)
     system.normal_operation(base, fault_at, rps=rps)
 
-    truth = inject_db_pool_exhausted(
-        logs,
-        system.service("order-service"),
-        fault_at,
-        metrics=system.metrics,
-        configs=system.configs,
+    truth = inject(
+        category,
+        InjectionContext(
+            system=system,
+            at=fault_at,
+            target=asked_about,
+            seed=seed,
+        ),
     )
-
-    question = f"order-service 从 {fault_at:%H:%M} 前后开始错误率飙升，帮忙定位一下原因"
 
     return Scenario(
         manifest=ScenarioManifest(
             scenario_id=truth.scenario_id,
-            question=question,
+            question=build_question(category, asked_about, fault_at),
             ground_truth=truth,
             topology=system.describe(),
         ),
@@ -261,6 +289,35 @@ def build_db_pool_scenario(
         configs=system.configs,
         deploys=system.deploys,
     )
+
+
+def build_db_pool_scenario(
+    *,
+    seed: int = 0,
+    base_time: datetime | None = None,
+    warmup_minutes: int = 2,
+    rps: float = 2.0,
+) -> Scenario:
+    """构造一个「连接池耗尽」场景。:func:`build_scenario` 的便捷写法。"""
+    return build_scenario(
+        FaultCategory.DB_POOL_EXHAUSTED,
+        seed=seed,
+        base_time=base_time,
+        warmup_minutes=warmup_minutes,
+        rps=rps,
+    )
+
+
+def build_all_scenarios(
+    *,
+    seed: int = 0,
+    base_time: datetime | None = None,
+) -> list[Scenario]:
+    """把注册表里的**每一种**故障各构造一个场景。
+
+    M6 的评测台会用它铺开评测集。
+    """
+    return [build_scenario(category, seed=seed, base_time=base_time) for category in available()]
 
 
 __all__ = [
@@ -273,5 +330,8 @@ __all__ = [
     "METRICS_NAME",
     "Scenario",
     "ScenarioManifest",
+    "build_all_scenarios",
     "build_db_pool_scenario",
+    "build_question",
+    "build_scenario",
 ]

@@ -63,9 +63,15 @@ def test_get_returns_the_spec() -> None:
 
 
 def test_unknown_category_raises_with_the_list() -> None:
-    """报错信息要能告诉调用方「有哪些可用」。"""
+    """报错信息要能告诉调用方「有哪些可用」。
+
+    用一个**确定没注册**的类别，而不是写死某个名字 ——
+    否则将来给它加了注入器，这个测试会莫名其妙地失败。
+    """
+    unregistered = next(c for c in FaultCategory if c not in available())
+
     with pytest.raises(KeyError, match="没有注册故障"):
-        get(FaultCategory.CERT_EXPIRED)
+        get(unregistered)
 
 
 def test_duplicate_registration_is_rejected() -> None:
