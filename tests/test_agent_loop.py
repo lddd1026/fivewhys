@@ -163,6 +163,19 @@ async def test_invalid_diagnosis_is_rejected_and_retried() -> None:
     assert "格式不合法" in llm.all_content()
 
 
+async def test_malformed_json_submission_is_fed_back() -> None:
+    """模型交回一段根本不是 JSON 的东西时，也要喂回错误让它重交。"""
+    llm = ScriptedLLM([call(SUBMIT_TOOL_NAME, "这不是 JSON，我直接说吧"), submit()])
+    run = await diagnose(
+        scenario_id="s1", question=QUESTION, registry=_registry(), llm=llm, settings=_settings()
+    )
+
+    assert run.stop_reason == "submitted"
+    assert run.diagnosis is not None
+    assert run.tool_calls[0].ok is False
+    assert "字段结构" in (run.tool_calls[0].error or "")
+
+
 async def test_plain_text_triggers_a_nudge_instead_of_ending() -> None:
     """模型只顾说话不调工具时，要推它一把，而不是当作调查结束。"""
     llm = ScriptedLLM([say("我先看看日志。"), submit()])
@@ -280,3 +293,89 @@ def test_submit_spec_has_no_refs() -> None:
 def test_submit_spec_describes_it_as_the_only_way_to_finish() -> None:
     description = submit_tool_spec()["function"]["description"]
     assert "唯一" in description
+
+
+def test_all_requirement_fields_are_required() -> None:
+    """需求 FR-6 列的字段必须全部在 required 里。
+
+    一旦某个字段带了默认值，它就不在 required 里，模型可以整段省略，
+    最后交上来的只剩一句根因 —— 「结构化输出」就名存实亡了。
+    这个坑是 FIV-5 的起飞前检查发现的（当时 required 只有 4 个）。
+    """
+    required = set(submit_tool_spec()["function"]["parameters"]["required"])
+    assert required == {
+        "root_cause",
+        "root_cause_service",
+        "fault_category",
+        "confidence",
+        "why_chain",
+        "evidence",
+        "ruled_out",
+        "suggested_fix",
+        "summary",
+    }
+
+
+def test_submit_spec_requires_all_nine_fields() -> None:
+    """防止将来有人给某个字段加回默认值，悄悄把它从 required 里挤出去。"""
+    required = submit_tool_spec()["function"]["parameters"]["required"]
+    assert len(required) == 9
+
+
+# --------------------------------------------------------------------------
+# _inline_refs — 它错了，整个 submit_diagnosis 就没法用
+# --------------------------------------------------------------------------
+
+
+def test_inline_refs_expands_reference() -> None:
+    from fivewhys.agent.loop import _inline_refs
+
+    schema = {
+        "$defs": {"Thing": {"type": "object", "properties": {"a": {"type": "string"}}}},
+        "type": "object",
+        "properties": {"item": {"$ref": "#/$defs/Thing"}},
+    }
+    result = _inline_refs(schema)
+
+    assert "$defs" not in result
+    assert result["properties"]["item"]["type"] == "object"
+    assert "a" in result["properties"]["item"]["properties"]
+
+
+def test_inline_refs_keeps_sibling_keys() -> None:
+    """``$ref`` 旁边还挂着别的键（例如 description）时，展开后必须保留。"""
+    from fivewhys.agent.loop import _inline_refs
+
+    schema = {
+        "$defs": {"Thing": {"type": "object"}},
+        "properties": {"item": {"$ref": "#/$defs/Thing", "description": "一个东西"}},
+    }
+    result = _inline_refs(schema)
+
+    assert result["properties"]["item"]["description"] == "一个东西"
+    assert result["properties"]["item"]["type"] == "object"
+
+
+def test_inline_refs_handles_nested_arrays() -> None:
+    from fivewhys.agent.loop import _inline_refs
+
+    schema = {
+        "$defs": {"Thing": {"type": "object"}},
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/Thing"}}},
+    }
+    result = _inline_refs(schema)
+
+    assert result["properties"]["items"]["items"]["type"] == "object"
+    assert "$ref" not in json.dumps(result)
+
+
+async def test_json_array_arguments_are_rejected() -> None:
+    """模型偶尔会返回合法 JSON 但不是对象（例如数组）—— 也要兜住。"""
+    llm = ScriptedLLM([call("query_logs", "[1, 2, 3]"), submit()])
+    run = await diagnose(
+        scenario_id="s1", question=QUESTION, registry=_registry(), llm=llm, settings=_settings()
+    )
+
+    assert run.tool_calls[0].ok is False
+    assert "必须是 JSON 对象" in (run.tool_calls[0].error or "")
+    assert run.stop_reason == "submitted", "循环不能因此崩掉"

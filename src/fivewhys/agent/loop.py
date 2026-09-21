@@ -217,13 +217,19 @@ def _execute_tool(registry: ToolRegistry, call: ToolCall, step: int) -> ToolCall
 
 
 def _parse_diagnosis(arguments: str) -> tuple[Diagnosis | None, str]:
-    """把模型的提交解析成 ``Diagnosis``。失败时返回具体错误，供喂回模型。"""
+    """把模型的提交解析成 ``Diagnosis``。失败时返回具体错误，供喂回模型。
+
+    只捕 ``ValidationError`` 就够了：Pydantic v2 的 ``model_validate_json``
+    对「完全不是 JSON」「JSON 语法错」「字段缺失或类型错」**一律**抛它
+    （而 ``ValidationError`` 本身就是 ``ValueError`` 的子类）。
+
+    原先还写了一个 ``except ValueError``，实测永远走不到 —— 是死代码，已删。
+    证据：三种畸形输入都落进 ``ValidationError``。
+    """
     try:
         return Diagnosis.model_validate_json(arguments), ""
     except ValidationError as exc:
         return None, f"结论不符合要求的字段结构：\n{exc}"
-    except ValueError as exc:
-        return None, f"结论不是合法的 JSON：{exc}"
 
 
 # --------------------------------------------------------------------------
