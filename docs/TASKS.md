@@ -13,9 +13,7 @@
 
 ## 进行中
 
-- [~] **FIV-2** 实现 `query_logs` 工具（含 NFR-11 上下文预算 ≤2000 token） · `P0` · 约 2h
-  - 分支：`feat/FIV-2-query-logs`
-  - 涉及：`src/fivewhys/tools/query_logs.py`、`tests/test_query_logs.py`
+（空）
 
 ---
 
@@ -90,6 +88,11 @@
 ---
 
 ## 已完成
+
+- [x] **FIV-2** 实现 `query_logs` 工具 · 已完成
+  - 提交：`1029bc0 feat(tools): 实现 query_logs 工具`
+  - 验收：13 个新测试（全套 30 passed）· 受 NFR-11 预算约束 · 空结果有线索提示
+  - 手工验证抓到 bug：`keyword` 原先不匹配 `trace_id`，导致"追 trace"手法失效
 
 - [x] **FIV-1** 实现 `db_pool_exhausted` 故障注入 · 已完成
   - 提交：`4ec2e2a feat(mock): 实现 db_pool_exhausted 故障注入`
