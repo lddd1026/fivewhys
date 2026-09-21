@@ -12,6 +12,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from fivewhys.mock.changes import ConfigStore
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
 from fivewhys.models import LogLevel
@@ -141,4 +142,28 @@ class FaultScript:
         self._successes.clear()
 
 
-__all__ = ["FaultScript"]
+def record_config_change(
+    configs: ConfigStore | None,
+    *,
+    service_name: str,
+    changes: dict[str, object],
+    at: datetime,
+    note: str,
+) -> None:
+    """改掉若干配置项，并记一条变更快照。
+
+    大多数故障的根因都是「某个配置被改了」。抽出来省得每个注入器都写一遍
+    「取最新快照 → 复制 → 改值 → 记录」。
+
+    ``configs`` 为 None 时什么都不做 —— 这让注入器在不需要配置的场景里
+    （比如单服务测试）也能照常工作。
+    """
+    if configs is None:
+        return
+    current = configs.latest(service_name, at)
+    values = dict(current.values) if current else {}
+    values.update(changes)
+    configs.record_values(at, service_name, values, note=note)
+
+
+__all__ = ["FaultScript", "record_config_change"]

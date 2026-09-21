@@ -163,8 +163,23 @@ __all__ = [
     "get",
     "inject",
     "register",
+    # 各注入器模块。它们既是「导入即注册」的副作用，也是公开入口 ——
+    # 列在这里同时也告诉静态检查器「这些 import 是有意为之」。
+    "cert",
+    "db_pool",
+    "dependency",
+    "healthy",
+    "memory",
+    "rollout",
 ]
 
 # 在这里 import 各个注入器模块，触发它们的 @register。
 # 放在文件末尾是必须的 —— 此时上面的 register / InjectionContext 已经定义好了。
-from fivewhys.mock.injectors import db_pool  # noqa: E402, F401
+from fivewhys.mock.injectors import (  # noqa: E402
+    cert,
+    db_pool,
+    dependency,
+    healthy,
+    memory,
+    rollout,
+)
