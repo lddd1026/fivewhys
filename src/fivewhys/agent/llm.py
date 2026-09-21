@@ -25,6 +25,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+# ⚠️ 必须在【任何地方 import litellm 之前】执行，所以放在模块级而不是构造函数里。
+#
+# litellm 一被 import 就会去 GitHub 拉最新的模型价格表；网络不通时它重试 3 次
+# 才回退到本地备份 —— 实测这一下要 60 秒以上，直接爆掉 NFR-3 的延迟预算。
+# 因为它不报错、只是慢，很容易被忽略。
+#
+# 曾经把这行放在 LiteLLMClient.__init__ 里，结果被 import 顺序打败了：
+# 只要有人先 `import litellm`，开关就来不及生效，测试套件从 2 秒变成 68 秒。
+# 这个坑是跑 --durations 时发现的。
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 # OpenAI 风格的消息。litellm 会把各家 provider 的差异抹平到这种格式。
 Message = dict[str, Any]
 
@@ -77,16 +88,7 @@ class LiteLLMClient:
     """
 
     def __init__(self, *, model: str, temperature: float = 0.0) -> None:
-        # ⚠️ 必须在 import litellm 之前设置。
-        #
-        # litellm 启动时会去 GitHub 拉最新的模型价格表；网络不通时它重试 3 次
-        # 才回退到本地备份 —— 实测这一下要花约 30 秒，直接爆掉 NFR-3 的延迟预算。
-        # 因为它不报错、只是慢，很容易被忽略。
-        #
-        # 我们只需要「大致准确」的成本估算（NFR-2 是软约束），本地表足够。
-        # 这个坑是 FIV-5 的起飞前检查发现的。
-        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-
+        # 离线价格表的开关在**模块级**设置 —— 见文件顶部。放在这里会太晚。
         import litellm
 
         self._litellm = litellm
