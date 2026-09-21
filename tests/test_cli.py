@@ -17,6 +17,8 @@ from typer.testing import CliRunner
 from fivewhys import __version__
 from fivewhys.cli import app
 from fivewhys.config import get_settings
+from fivewhys.mock.injectors import available
+from fivewhys.snapshot import build_snapshot, combine_digests, load_snapshot, save_snapshot
 
 runner = CliRunner()
 
@@ -153,6 +155,109 @@ def test_build_scenario_is_reproducible(tmp_path: Path) -> None:
     manifest_a = next(first.iterdir()) / "scenario.json"
     manifest_b = next(second.iterdir()) / "scenario.json"
     assert manifest_a.read_text(encoding="utf-8") == manifest_b.read_text(encoding="utf-8")
+
+
+def test_build_scenario_accepts_a_category(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["build-scenario", "--category", "memory_leak", "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "memory_leak" in result.stdout
+    assert "memory-leak" in next(tmp_path.iterdir()).name
+
+
+def test_build_scenario_rejects_an_unregistered_category(tmp_path: Path) -> None:
+    """``slow_query`` 在枚举里但还没实现 —— 报错要指出这一点，而不是只说「不合法」。
+
+    只断言「说了没有这个故障」：错误信息会被 Rich 按终端宽度折行，
+    长单词（故障名）在中间断开，断言具体词会误判。
+    """
+    result = runner.invoke(
+        app,
+        ["build-scenario", "--category", "slow_query", "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "没有这个故障" in result.output
+
+
+def test_faults_lists_every_registered_fault() -> None:
+    result = runner.invoke(app, ["faults"])
+
+    assert result.exit_code == 0
+    for category in available():
+        assert category.value in result.stdout
+
+
+# --------------------------------------------------------------------------
+# snapshot（FIV-12）
+# --------------------------------------------------------------------------
+
+
+def test_snapshot_writes_packages_and_a_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "snapshot.json"
+    out = tmp_path / "scenarios"
+
+    result = runner.invoke(app, ["snapshot", "--out", str(out), "--manifest", str(manifest)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "自校验通过" in result.stdout
+    assert manifest.exists()
+
+    snapshot = load_snapshot(manifest)
+    assert len(snapshot.scenarios) == len(available())
+    for entry in snapshot.scenarios:
+        assert (out / entry.scenario_id / "scenario.json").exists()
+
+
+def test_snapshot_check_passes_right_after_taking(tmp_path: Path) -> None:
+    manifest = tmp_path / "snapshot.json"
+    runner.invoke(
+        app, ["snapshot", "--out", str(tmp_path / "scenarios"), "--manifest", str(manifest)]
+    )
+
+    result = runner.invoke(app, ["snapshot", "--check", "--manifest", str(manifest)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "快照校验通过" in result.stdout
+
+
+def test_snapshot_check_fails_when_the_snapshot_is_stale(tmp_path: Path) -> None:
+    """场景数据变了（这里把记录里的指纹改成对不上的值）→ 校验必须失败，并告诉人怎么修。
+
+    注意不能用「换一个种子」来伪造：快照里记了种子，校验会照着那个种子重放，
+    照样一致。**唯一能造成不一致的就是代码变了或快照被改过** —— 这正是它的意义。
+    """
+    manifest = tmp_path / "snapshot.json"
+    fresh = build_snapshot(seed=0)
+    entry = fresh.scenarios[0]
+    files = {**entry.files, "logs.jsonl": "f" * 64}
+    drifed = fresh.model_copy(
+        update={
+            "scenarios": [
+                entry.model_copy(update={"files": files, "digest": combine_digests(files.items())}),
+                *fresh.scenarios[1:],
+            ]
+        }
+    )
+    save_snapshot(drifed, manifest)
+
+    result = runner.invoke(app, ["snapshot", "--check", "--manifest", str(manifest)])
+
+    assert result.exit_code == 1
+    assert "快照校验未通过" in result.stdout
+    assert "fivewhys snapshot" in result.stdout, "报错里要给出修复命令"
+
+
+def test_snapshot_check_reports_a_missing_manifest(tmp_path: Path) -> None:
+    """缺快照文件是最常见的第一步失误 —— 要给一句人话，不要甩 traceback。"""
+    result = runner.invoke(app, ["snapshot", "--check", "--manifest", str(tmp_path / "nope.json")])
+
+    assert result.exit_code == 1
+    assert "没有快照文件" in result.stdout
+    assert "Traceback" not in result.output
 
 
 # --------------------------------------------------------------------------

@@ -168,22 +168,25 @@ class ConfigStore:
 
     # ---- 持久化 ----
 
+    def to_jsonl(self) -> str:
+        """整个仓库序列化成 JSONL 文本。落盘与快照指纹共用这一份（见 FIV-12）。"""
+        return "".join(
+            json.dumps(
+                {
+                    "ts": snap.ts.isoformat(),
+                    "service": snap.service,
+                    "values": snap.values,
+                    "note": snap.note,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for snap in self.all()
+        )
+
     def dump_jsonl(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
-            for snap in self.all():
-                handle.write(
-                    json.dumps(
-                        {
-                            "ts": snap.ts.isoformat(),
-                            "service": snap.service,
-                            "values": snap.values,
-                            "note": snap.note,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+        path.write_text(self.to_jsonl(), encoding="utf-8", newline="\n")
         return path
 
     @classmethod
@@ -256,23 +259,26 @@ class DeployStore:
             and (end is None or rec.ts <= end)
         ]
 
+    def to_jsonl(self) -> str:
+        """整个仓库序列化成 JSONL 文本。落盘与快照指纹共用这一份（见 FIV-12）。"""
+        return "".join(
+            json.dumps(
+                {
+                    "ts": rec.ts.isoformat(),
+                    "service": rec.service,
+                    "version": rec.version,
+                    "operator": rec.operator,
+                    "note": rec.note,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for rec in self.all()
+        )
+
     def dump_jsonl(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
-            for rec in self.all():
-                handle.write(
-                    json.dumps(
-                        {
-                            "ts": rec.ts.isoformat(),
-                            "service": rec.service,
-                            "version": rec.version,
-                            "operator": rec.operator,
-                            "note": rec.note,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+        path.write_text(self.to_jsonl(), encoding="utf-8", newline="\n")
         return path
 
     @classmethod

@@ -143,11 +143,13 @@ class MetricStore:
 
     # ---- 持久化（场景包要用，见 FIV-9）----
 
+    def to_jsonl(self) -> str:
+        """整个仓库序列化成 JSONL 文本。落盘与快照指纹共用这一份（见 FIV-12）。"""
+        return "".join(sample_to_json(sample) + "\n" for sample in self._samples)
+
     def dump_jsonl(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
-            for sample in self._samples:
-                handle.write(sample_to_json(sample) + "\n")
+        path.write_text(self.to_jsonl(), encoding="utf-8", newline="\n")
         return path
 
     @classmethod

@@ -115,3 +115,38 @@ python scripts/demo_m1.py --runs 3 --trace
   只会静默失效 —— 请求会打到官方接口上，然后收到莫名其妙的鉴权失败。
   `tests/test_e2e_demo.py::test_env_var_prefix_is_fivewhys` 守着这一点。
 - 假服务用 HTTP/1.1 + `Content-Length`，注意别漏 `Content-Length` 否则客户端会一直等。
+
+## 场景快照：证明评测集没被改过
+
+```powershell
+# 重造全部场景 + 重拍快照（不调 LLM，不联网，不花钱）
+python scripts/snapshot_scenarios.py           # 等价于 fivewhys snapshot
+
+# 只校验，不写任何文件 —— 刚 clone 下来、data/ 还是空的也能跑
+python scripts/snapshot_scenarios.py --check   # 等价于 fivewhys snapshot --check
+
+fivewhys faults                                # 看有哪些故障可注入
+fivewhys build-scenario -c memory_leak         # 只造一个，调试用
+```
+
+两份东西，用途完全不同：
+
+| 位置 | 内容 | 进版本库吗 |
+| ---- | ---- | ---------- |
+| `data/scenarios/` | 场景包（日志 / 指标 / 配置 / 发布） | ❌ 生成物，`.gitignore` 了 |
+| `eval/scenario_snapshot.json` | 每个场景的 SHA-256 指纹 | ✅ **这才是证据** |
+
+校验比对的是「代码 + 种子 → 字节」，**不读磁盘上的场景包**。
+所以删掉 `data/` 目录也能校验通过，校验也不会往临时目录（尤其 C 盘）写东西。
+
+### 快照测试红了怎么办
+
+`tests/test_snapshot.py::test_committed_snapshot_matches_current_code` 会失败。
+**它红不代表代码写错了 —— 代表评测集变了。**
+
+1. 先确认改动是不是有意的（确实加了新故障？确实改了注入器描述的现象？）
+2. 是有意的 → `python scripts/snapshot_scenarios.py` 重拍，和代码一起提交
+3. 不是有意的 → `git diff src/fivewhys/mock/` 看谁动过场景数据
+
+**不要直接删掉快照文件了事。** M7 的改进曲线只有在「两次跑的是同一套场景」
+时才可比 —— 这道闸门就是为那件事存在的。
