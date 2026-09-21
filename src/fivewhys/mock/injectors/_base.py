@@ -11,11 +11,22 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fivewhys.mock.changes import ConfigStore
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
 from fivewhys.models import LogLevel
+
+if TYPE_CHECKING:
+    # 只在类型检查时导入，避免 mock 包内部的循环依赖
+    from fivewhys.mock.topology import MockSystem
+
+# 故障期间系统级背景流量的默认间隔（秒）。
+#
+# ⚠️ 这个间隔指的是**整个系统每 3 秒完成一次完整请求**（一次请求 = 三个服务各若干行日志），
+# 不是「每个服务每 3 秒一条」。两者差了好几倍。
+DEFAULT_TRAFFIC_INTERVAL_S = 3.0
 
 
 @dataclass
@@ -32,13 +43,19 @@ class FaultScript:
     请一律用这里的 :meth:`error` / :meth:`warn` / :meth:`info` / :meth:`ok`。
     它们会**同时**把事件写进日志和指标两个仓库。
 
-    这是「日志与指标同源」的落地点。各写各的话，会出现
+    这是「日志与指标同源」的落地。各写各的话，会出现
     「日志说错误率 15%、指标说 2%」这种矛盾 —— agent 会被带偏，
     它会认为「监控没报警，问题不大」。
+
+    ## ⚠️ 背景流量要用 :meth:`system_traffic`，不要用 :meth:`background_traffic`
+
+    原因见 :meth:`system_traffic` 的说明 —— 一句话：
+    只给被点名的服务发流量，等于告诉 agent「哪些服务没被点名」。
     """
 
     service: MockService
     metrics: MetricStore | None = None
+    system: MockSystem | None = None
 
     _events: list[tuple[datetime, LogLevel, str, str | None]] = field(default_factory=list)
     _failures: list[tuple[datetime, int, int]] = field(default_factory=list)
@@ -101,7 +118,10 @@ class FaultScript:
         interval_s: float = 3.0,
         method: str = "GET",
     ) -> None:
-        """故障期间的正常请求流量。
+        """**单服务**的正常请求流量。
+
+        ⚠️ 只有拿不到 ``system`` 时（M1 的最小单服务场景）才该用它。
+        多服务场景请用 :meth:`system_traffic`。
 
         **不能省掉这一段。** 没有它，故障窗口里 100% 都是 ERROR/WARN，
         agent 一眼就锁定了，根本不需要推理能力。
@@ -117,6 +137,54 @@ class FaultScript:
                 latency,
                 trace_id=self.service.new_trace_id(),
             )
+            cursor += step
+
+    def system_traffic(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        rng: random.Random,
+        interval_s: float = DEFAULT_TRAFFIC_INTERVAL_S,
+    ) -> None:
+        """故障期间的正常流量 —— **走完整调用链**。
+
+        拿不到 ``system`` 时自动退化成单服务的 :meth:`background_traffic`。
+
+        ## 为什么必须跨服务（FIV-D1）
+
+        背景流量不只是「制造噪声」，它还决定了**哪些服务在故障窗口里有采样**。
+
+        只给被点名的服务发流量，会同时造成两个后果：
+
+        1. **泄漏**：没被点名的服务在故障窗口里一条采样都没有，而健康场景
+           （:mod:`fivewhys.mock.injectors.healthy` 用的是 ``system.emit_request``）
+           每个服务都有。于是 agent 只要查一次下游服务的指标，
+           就能判断「有没有故障」—— 完全不需要推理。
+        2. **抽掉关键手法**：``dependency_5xx`` 场景就是要 agent 顺着调用链
+           往下游追，可下游在故障窗口里查不到任何流量，这条路走不通。
+
+        这个缺陷是 FIV-13 手工检查工具输出时发现的（看板上的 FIV-D1），
+        当时的数据：
+
+        ::
+
+            故障窗口 14:02:00 ~ 14:07:00
+            order-service      故障期 5 桶
+            payment-service    故障期 0 桶
+            inventory-service  故障期 0 桶
+
+        ``rng`` 目前只用于退化路径；跨服务流量用系统自己的随机源 ——
+        这样同一次请求在各个服务里的数字才自洽（见 ``MockSystem._handle``）。
+        """
+        if self.system is None:
+            self.background_traffic(start, end, rng=rng, interval_s=interval_s)
+            return
+
+        cursor = start
+        step = timedelta(seconds=interval_s)
+        while cursor < end:
+            cursor = self.system.emit_request(cursor)
             cursor += step
 
     # ---- 统一写入 ----
@@ -166,4 +234,4 @@ def record_config_change(
     configs.record_values(at, service_name, values, note=note)
 
 
-__all__ = ["FaultScript", "record_config_change"]
+__all__ = ["DEFAULT_TRAFFIC_INTERVAL_S", "FaultScript", "record_config_change"]

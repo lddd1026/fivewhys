@@ -6,54 +6,54 @@
     {
       "scenario_id": "order-service-bad-rollout-20260101140200",
       "fault_category": "bad_config_rollout",
-      "digest": "24b4e1be6985fd2b291e77f7ac6d8fcfdcee7e2498b2129332ae460c67fd9d4a",
+      "digest": "93e16e315e8cfee66ee7c616e200ee19b0170fbc7efede9c16259363d3029541",
       "files": {
         "scenario.json": "e273e15168b079ebcfd333e6fec41a59e6cccdac106967b4c4c7e6e657da797a",
-        "logs.jsonl": "1cebf94073d27f295889b2a49254c146c423bf957174643dcfb413f1274dc850",
-        "metrics.jsonl": "3d9981dada110f77351a8d55866334d8d170bc72696021c862a90af4dabb05f7",
+        "logs.jsonl": "b6ac6c28865dfcbfb491f8c88c131f00de5bad28edca84b62a4e8c823dc4696b",
+        "metrics.jsonl": "3dd6e6176059aae245878935fa7dd5b503d3f1f4564c41bf35f92ae98cd0d840",
         "configs.jsonl": "33fe003334f717790913fb49a2ad19a0b02bcdd49256ccbd918e7940e2b506b3",
         "deploys.jsonl": "9650f31edbab650e9d4243fd19c3ec196aa6befab8492a1a9e9ec45f75148e5d"
       },
-      "total_bytes": 409578
+      "total_bytes": 565304
     },
     {
       "scenario_id": "order-service-cert-expired-20260101140200",
       "fault_category": "cert_expired",
-      "digest": "510b97e41f5ef3cb444a765e6dbcb5a563d18b88f923c0acbf23ce693f042a9b",
+      "digest": "06c31a20cfd4518e10526dc697dd351c7d53ac400d3c4a5c45c693492c12c12c",
       "files": {
         "scenario.json": "e65a1370cf2b57feb833201650aac4a939005b6b1f327b83cfea43d0a6f15edd",
-        "logs.jsonl": "c92ecbbf79323537a0259b88196c6bbf4a92005a343d67137608afe8e7cf3bf6",
-        "metrics.jsonl": "19da5dbdd2a0ed4edb14a02ccd2991337df2d22a66c779387e0e0ca478382efc",
+        "logs.jsonl": "12a36a833f68353082f0ccf43878503d8d2b0e4951f4775617c52d8c193413c9",
+        "metrics.jsonl": "7cc4b4630187bf278ff94831ace26b65114d10e66a9d6c5317769cb71594655d",
         "configs.jsonl": "888ada634d26a4fb65fe16f137206ee2baa983ef7ace0c57a3231667cb6cfdfb",
         "deploys.jsonl": "892df48d5b20f0aec36f205cae7179b0af9c2ffc778b9136a26438cfc30c4090"
       },
-      "total_bytes": 438262
+      "total_bytes": 569238
     },
     {
       "scenario_id": "order-service-db-pool-20260101140200",
       "fault_category": "db_pool_exhausted",
-      "digest": "247880db8e3d6aedb19b5e913a467ee25a29b86acb1028f8edb769e1b9a61781",
+      "digest": "670c154c8fc601171abe613a33dfbc33db3d1a39200d2f9844f41b62f1b8c8c8",
       "files": {
         "scenario.json": "57a16f34db4f2c53112d144f4886e83168345bc3330dad7397f21db2c1c408c2",
-        "logs.jsonl": "8dbe3ca81574ff9bc75c0d3df86acdbc27879ba0ba5612afe73cfcca4df0bac4",
-        "metrics.jsonl": "ac2048b30c959e8b9adc96422cf89226ed32f2da9424dd27452f5f02126f1830",
+        "logs.jsonl": "ea9ee31d63a8ab938d608f07c91c7e82fbf021fe24aabda4931c2baba73c82bb",
+        "metrics.jsonl": "40ff81108c7b85e6320af89dcd43976fd11b648f4bfde5d43e52d9df5b8adcae",
         "configs.jsonl": "8257bf98b704236814cd0bbcee6adca537d5fd46dca75d12f0a3c9c3b57245e2",
         "deploys.jsonl": "892df48d5b20f0aec36f205cae7179b0af9c2ffc778b9136a26438cfc30c4090"
       },
-      "total_bytes": 408206
+      "total_bytes": 563932
     },
     {
       "scenario_id": "order-service-dependency-5xx-20260101140200",
       "fault_category": "dependency_5xx",
-      "digest": "8c8f415c1f0c81b52a928e07ecb2280a9b07daa0a49b77f01e8609cff1260739",
+      "digest": "94033e2b7549ed737cf03b68411dfecabb622935cfe211eb8285716579bdc4b4",
       "files": {
         "scenario.json": "94a36964490b9a369547b1408922ab1781dc3388a0dc077c5a363ca8dc6a3926",
-        "logs.jsonl": "79a263378f505044cdd7cce92ccc51f6bb15bf03b5b7711d0bcb5b5ff254db39",
-        "metrics.jsonl": "5d7e387829154b0b423d18c8ac9067bfc33461148ae4fff104cc1057b0fcfc00",
+        "logs.jsonl": "1073fde132bcec3457ba9d51cc7f163e29dc8dfb380c6eb5f84c4f6e4ec44327",
+        "metrics.jsonl": "7ef10d1d1e5aa88505a691f3d8c40c731badf6b0ab145b64a84d17cf9af73c7d",
         "configs.jsonl": "97c76ca2d50916f6764918c718fa0969b930b48af838eb2cd97a4e8894ebbc6d",
         "deploys.jsonl": "892df48d5b20f0aec36f205cae7179b0af9c2ffc778b9136a26438cfc30c4090"
       },
-      "total_bytes": 425335
+      "total_bytes": 568561
     },
     {
       "scenario_id": "order-service-healthy-20260101140200",
@@ -71,15 +71,15 @@
     {
       "scenario_id": "order-service-memory-leak-20260101140200",
       "fault_category": "memory_leak",
-      "digest": "9dbfc8ccebb76e673b2d97a16dd832f40ece14e7e72a4ccb985bfe549484900c",
+      "digest": "83109a7209c6ae183cac3c5be32d9ecb9f7607217155994e57ccb522e3b6ab23",
       "files": {
         "scenario.json": "df2d2a6ad1c36bb8074d4571ad5a02b211c522fd9ada067978bb425dffde605b",
-        "logs.jsonl": "6ee94b9bde276264405e8b313fe4510c0d9e7c41a468f5b3331ca2f3ae81d5a2",
-        "metrics.jsonl": "8c47f9d20a2505c0b32c93bb0e614bc33ea5be00b6b6483556436dba69aeb85d",
+        "logs.jsonl": "d36086f95c15a497395b53c7932df3cf497a19729d7e1cd78c5e789687526992",
+        "metrics.jsonl": "dce220159fc96ce860e0fb38c7e08b65c2b84075f75246adbc187363d6232ee5",
         "configs.jsonl": "c8acdc3f426d2bfbdbe412b018154b3f4bb97716f079afbfa23b480e384ff0d5",
         "deploys.jsonl": "892df48d5b20f0aec36f205cae7179b0af9c2ffc778b9136a26438cfc30c4090"
       },
-      "total_bytes": 441559
+      "total_bytes": 727825
     }
   ]
 }

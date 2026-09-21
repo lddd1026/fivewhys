@@ -328,6 +328,101 @@ def test_no_fault_has_no_answer_keywords() -> None:
 
 
 # --------------------------------------------------------------------------
+# ⭐ FIV-D1：故障窗口里每个服务都要有流量
+#
+# 这条不只是"数据够不够真"。**没被点名的服务在故障窗口里没有采样**本身
+# 就是「有故障」的信号 —— agent 只要数一遍哪个服务没数据，就知道答案了，
+# 完全不需要推理。而 dependency_5xx 那种要靠调用链排查的场景，
+# 下游查不到流量等于把关键手法抽掉了。
+# --------------------------------------------------------------------------
+
+
+def _services_with_traffic(scenario: Scenario, window_start: datetime) -> set[str]:
+    """故障窗口内有指标采样的服务。"""
+    fault_at = scenario.ground_truth.injected_at
+    end = fault_at + timedelta(minutes=5)
+    return {
+        service
+        for service in scenario.topology
+        if [
+            bucket
+            for bucket in scenario.metrics.query(service, window_start, end)
+            if bucket.start >= fault_at
+        ]
+    }
+
+
+@pytest.mark.parametrize("category", sorted(available(), key=lambda c: c.value))
+def test_every_service_has_traffic_during_the_fault(
+    category: FaultCategory,
+) -> None:
+    """⭐ 每一种故障：故障窗口里**所有**服务都要有采样。"""
+    scenario = _scenario(category)
+    covered = _services_with_traffic(scenario, T0)
+
+    assert covered == set(scenario.topology), (
+        f"{category.value} 在故障窗口里这些服务没有流量："
+        f"{sorted(set(scenario.topology) - covered)} —— 等于告诉 agent「它们没被点名」"
+    )
+
+
+def test_fault_scenarios_look_the_same_as_the_healthy_one() -> None:
+    """故障场景和健康场景在「哪些服务有流量」上必须**完全看不出来**。
+
+    把这条写成断言，是因为这个缺陷（FIV-D1）正是这么被发现的：
+    单独看故障场景没问题，一比健康场景就露馅了 ——
+    健康场景三个服务都有流量，故障场景只有被点名的那个有。
+    """
+    healthy = _services_with_traffic(_scenario(FaultCategory.NO_FAULT), T0)
+
+    for category in available():
+        assert _services_with_traffic(_scenario(category), T0) == healthy, (
+            f"{category.value} 的服务流量分布和健康场景不一样 —— 这是可被利用的泄漏"
+        )
+
+
+def test_fault_traffic_is_reproducible() -> None:
+    """跨服务流量也必须可复现 —— 它现在会进场景包，会进指纹。"""
+    first = _scenario(FaultCategory.DB_POOL_EXHAUSTED)
+    second = _scenario(FaultCategory.DB_POOL_EXHAUSTED)
+
+    assert [e.model_dump_json() for e in first.logs.all()] == [
+        e.model_dump_json() for e in second.logs.all()
+    ]
+    assert first.metrics.all() == second.metrics.all()
+
+
+def test_metrics_and_logs_stay_in_sync_even_during_faults() -> None:
+    """⭐ 指标与日志同源 —— 在有故障的场景里也必须成立。
+
+    可对账的形式：一个服务在指标里的采样数，必须等于它的
+    「请求完成日志行数 + ERROR 日志行数」。
+
+    （WARN 不产生采样；``FaultScript.ok`` / ``error`` 各写一条日志 + 一条采样。）
+
+    这条以前只对**正常流量**验证过（`tests/test_metrics.py`）。故障场景里
+    背景流量改成跨服务之后（FIV-D1）日志量涨了三成 —— 正是该重新对一遍账的时候：
+    多出来的跨服务日志必须条条对应一条采样，不能有"只写日志不记指标"的路径。
+    """
+    import re
+
+    done = re.compile(r"^(?:POST|GET) .+ \d{3} \d+ms$")
+
+    for category in available():
+        scenario = _scenario(category)
+        for name in scenario.topology:
+            entries = [e for e in scenario.logs.all() if e.service == name]
+            accountable = sum(
+                1 for e in entries if done.match(e.message) or e.level.value == "ERROR"
+            )
+            samples = sum(1 for s in scenario.metrics.all() if s.service == name)
+            assert samples == accountable, (
+                f"{category.value} / {name}：指标 {samples} 条采样，"
+                f"日志只有 {accountable} 条可对账的行 —— 有一边在自说自话"
+            )
+
+
+# --------------------------------------------------------------------------
 # 全量构造（M6 会用到）
 # --------------------------------------------------------------------------
 

@@ -37,11 +37,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fivewhys.mock.injectors import InjectionContext, register
-from fivewhys.mock.injectors._base import FaultScript, record_config_change
+from fivewhys.mock.injectors._base import (
+    DEFAULT_TRAFFIC_INTERVAL_S,
+    FaultScript,
+    record_config_change,
+)
 from fivewhys.models import FaultCategory, GroundTruth
 
 DURATION = timedelta(minutes=5)
-NOISE_INTERVAL_S = 3.0
+NOISE_INTERVAL_S = DEFAULT_TRAFFIC_INTERVAL_S
 
 VICTIM_DEPENDENCY = "payment-service"
 CONFIG_RELOAD_NOTE = "config reloaded from /etc/order-service/tls.yaml"
@@ -54,11 +58,9 @@ CONFIG_RELOAD_NOTE = "config reloaded from /etc/order-service/tls.yaml"
 )
 def inject(ctx: InjectionContext) -> GroundTruth:
     service = ctx.service
-    victim = ctx.system.service(VICTIM_DEPENDENCY)
     rng = ctx.rng
 
-    script = FaultScript(service=service, metrics=ctx.metrics)
-    victim_script = FaultScript(service=victim, metrics=ctx.metrics)
+    script = FaultScript(service=service, metrics=ctx.metrics, system=ctx.system)
 
     start = ctx.at
     end = start + DURATION
@@ -111,33 +113,12 @@ def inject(ctx: InjectionContext) -> GroundTruth:
             cursor += timedelta(seconds=rng.randint(2, 6))
 
     # ---- 背景噪声 ----
-    # ⚠️ 两条路径都要有正常流量，才能体现「只有一条坏了」。
-    # 上游自己的入站请求
-    script.background_traffic(start, end, rng=rng, interval_s=NOISE_INTERVAL_S)
-    # 被打中的那个下游：它自己是**健康的**，请求正常处理，只是上游连不上它
-    victim_script.background_traffic(
-        start,
-        end,
-        rng=rng,
-        path="/api/v1/charge",
-        interval_s=NOISE_INTERVAL_S * 2,
-    )
-    # 没被影响的另一条路径 —— 用来做对照
-    healthy_script = FaultScript(
-        service=ctx.system.service("inventory-service"),
-        metrics=ctx.metrics,
-    )
-    healthy_script.background_traffic(
-        start,
-        end,
-        rng=rng,
-        path="/api/v1/reserve",
-        interval_s=NOISE_INTERVAL_S * 2,
-    )
+    # ⚠️ 三条路径都要有正常流量，才能体现「只有一条坏了」。
+    # 走完整调用链（FIV-D1）：一次请求自然覆盖 order -> payment / inventory，
+    # 三个服务在故障窗口里都有采样，谁都不特殊。
+    script.system_traffic(start, end, rng=rng)
 
     script.flush()
-    victim_script.flush()
-    healthy_script.flush()
 
     return GroundTruth(
         scenario_id=f"{service.name}-cert-expired-{start:%Y%m%d%H%M%S}",
