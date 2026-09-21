@@ -14,6 +14,7 @@
 ## 进行中
 
 - [~] **FIV-5** 端到端验证 M1 · `P0` · 约 2h
+  - 提交：`af58794 feat(demo): M1 端到端跑真实场景 + 走完整证据链`
   - 涉及：`scripts/demo_m1.py`、`tests/mock_llm_server.py`、`tests/test_e2e_demo.py`
   - ✅ 验证脚本已就绪（含 `--offline`、`--trace`、判分、判定输出）
   - ✅ **demo 现在跑的就是评测集里的那个场景**：3 个服务 + 五类数据齐备，
