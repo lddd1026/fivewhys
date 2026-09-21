@@ -257,10 +257,17 @@ def test_inject_db_pool_exhausted() -> None:
     # --- 没有污染注入前的日志 ---
     assert [e.message for e in store.all()[:n_normal]] == normal_msgs
 
-    # --- ⭐ 核心约束：日志不得泄漏答案 ---
+    # --- ⭐ 核心约束：日志不得泄漏【答案词】---
+    # 注意用 answer_keywords 而不是 match_keywords：
+    # "connection" 是关键线索、必须出现在日志里，它在 match_keywords 里但不在
+    # answer_keywords 里。用错会导致线索被误判成泄漏。
     text = " ".join(e.message.lower() for e in injected)
-    assert "pool" not in text
-    assert "exhaust" not in text
+    for keyword in gt.answer_keywords:
+        assert keyword.lower() not in text, f"日志泄漏了答案词「{keyword}」"
+
+    # --- 反过来：关键线索必须出现，否则 agent 无从推理 ---
+    assert "connection wait time" in text, "日志里缺少指向连接池的关键线索"
+    assert gt.answer_keywords, "必须定义答案词，否则泄漏检查形同虚设"
 
 
 def test_injection_is_reproducible() -> None:

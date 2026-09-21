@@ -13,10 +13,10 @@
 
 ## 进行中
 
-- [~] **FIV-4** 实现 agent 主循环 · `P0` · 约 4h
-  - 分支：`feat/FIV-4-agent-loop`
-  - 涉及：`src/fivewhys/agent/llm.py`、`src/fivewhys/agent/loop.py`、`tests/doubles.py`、
-    `tests/test_agent_loop.py`
+- [~] **FIV-5** 端到端手工验证 M1 · `P0` · 约 2h
+  - 分支：`feat/FIV-5-e2e-demo`
+  - 涉及：`scripts/demo_m1.py`（新建）
+  - 前置：`.env` 里需要 `DEEPSEEK_API_KEY`
 
 ---
 
@@ -84,6 +84,15 @@
 ---
 
 ## 已完成
+
+- [x] **FIV-4** 实现 agent 主循环 · 已完成
+  - 提交：`82a8c77 feat(agent): 实现 agent 主循环与 LLM 调用层`
+  - 验收：15 个循环测试，全套 53 passed，**全部不需要 API Key**
+  - 关键设计：LLM 调用抽成独立一层，用脚本化假客户端注入 → 循环逻辑可确定性测试
+
+- [x] **FIV-3** 把 `query_logs` 注册进 registry · 已完成
+  - 提交：`f720cd0 feat(tools): 新增 build_registry 统一工具装配入口`
+  - 验收：8 个测试，确认 registry 组装、schema 合法、参数校验先于执行
 
 - [x] **FIV-2** 实现 `query_logs` 工具 · 已完成
   - 提交：`1029bc0 feat(tools): 实现 query_logs 工具`

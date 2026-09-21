@@ -138,8 +138,24 @@ class GroundTruth(BaseModel):
     root_cause: str
     injected_at: datetime
     symptoms: list[str] = Field(description="注入后系统表面能看到的现象")
+
+    # ---- 两份关键词清单，用途完全不同，不能混用 ----
+    #
+    # 为什么必须分开：``connection`` 是关键线索（``connection wait time`` 飙升），
+    # 它**必须**出现在日志里；但它也可能出现在 agent 的正确答案里。
+    # 用一份清单同时做「判分」和「查泄漏」，必然自相矛盾。
+    # 这个 bug 是 FIV-5 的离线验证发现的。
+
     match_keywords: list[str] = Field(
-        description="判分用的关键词。agent 的结论里命中才算对",
+        description="【判分用】agent 的结论里命中任一即算通过这 20% 分项。可以宽",
+    )
+    answer_keywords: list[str] = Field(
+        default_factory=list,
+        description=(
+            "【查泄漏用】这些词**绝不能出现在日志里**（需求 FR-2 的判据）。"
+            "只放真正的答案词（pool / 连接池 / 耗尽），"
+            "绝不能放现象词（connection / timeout），否则线索会被误判成泄漏"
+        ),
     )
 
 
