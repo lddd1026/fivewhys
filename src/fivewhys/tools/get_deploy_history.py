@@ -105,7 +105,7 @@ def build_get_deploy_history_tool(deploys: DeployStore, *, services: Sequence[st
             summary,
             note="（受 limit 和输出预算限制，已截断）" if truncated else None,
             meta=meta,
-            lines=lines,
+            rows=lines,
         )
 
     return Tool(

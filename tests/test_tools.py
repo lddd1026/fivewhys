@@ -438,4 +438,8 @@ def test_no_tool_output_blows_the_context_budget(db_pool_scenario: Scenario) -> 
 
     for name, args in widest.items():
         out = registry.get(name)(**args)
-        assert len(out) <= MAX_RESPONSE_CHARS + 200, f"{name} 的返回突破了预算：{len(out)} 字符"
+        # ⚠️ 这里**不许留容差**。原先写成 `MAX + 200`，正好掩盖了
+        # 「表头不计入预算」那个越界（实测 6108 字符）。预算就是预算。
+        assert len(out) <= MAX_RESPONSE_CHARS, (
+            f"{name} 的返回突破了预算：{len(out)} > {MAX_RESPONSE_CHARS}"
+        )

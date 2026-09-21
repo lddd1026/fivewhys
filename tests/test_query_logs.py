@@ -137,7 +137,9 @@ def test_header_reports_total_count() -> None:
     store = _store()
     out = _query(store, limit=3)
     assert "共命中" in out
-    assert "显示 3 条" in out
+    # 摘要说命中多少条；「给你看了几条」由截断提示交代（limit=3）
+    assert "limit=3" in out
+    assert "被截断" in out
     assert "limit=3" in out
     assert len(_data_lines(out)) == 3
 
@@ -166,13 +168,26 @@ def test_char_budget_is_respected() -> None:
     assert total_chars <= MAX_RESPONSE_CHARS, f"返回 {total_chars} 字符，超出预算"
 
 
+def test_whole_response_fits_the_budget() -> None:
+    """⭐ 预算管的是**整段返回**，不是只有明细行。
+
+    上线前审查实测到的越界：原实现只在明细行上卡预算，表头（摘要 + 元信息 +
+    截断提示）是加在预算之外的 —— 最宽的参数下整段返回 6108 字符，
+    而 NFR-11 说的是「单次工具调用返回 ≤ 2000 token（约 6000 字符）」。
+    """
+    out = _query(_store(), start=T0, end=FAULT_END, levels=["INFO", "WARN", "ERROR"], limit=200)
+    assert len(out) <= MAX_RESPONSE_CHARS, f"整段返回 {len(out)} 字符，超出预算"
+
+
 def test_budget_truncation_is_disclosed() -> None:
     """被预算截断时必须告知模型，否则它会以为这就是全部。"""
     out = _query(_store(), start=T0, end=FAULT_END, levels=["INFO", "WARN", "ERROR"], limit=200)
     assert "共命中" in out
-    assert "字符预算限制" in out
+    assert "被截断" in out
+    assert "limit=200" in out
+    assert "6000" in out, "要说明预算数字，模型才知道该怎么缩"
 
 
 def test_small_window_returns_full_content_without_truncation_note() -> None:
     out = _query(_store(), keyword="connection wait", limit=200)
-    assert "字符预算限制" not in out
+    assert "被截断" not in out

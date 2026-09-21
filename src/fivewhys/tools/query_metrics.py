@@ -125,7 +125,7 @@ def build_query_metrics_tool(metrics: MetricStore, *, services: Sequence[str] = 
             summary,
             note=TRUNCATED_NOTE if truncated else None,
             meta=meta,
-            lines=lines,
+            rows=lines,
         )
 
     return Tool(

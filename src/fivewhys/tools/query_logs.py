@@ -56,7 +56,6 @@ from fivewhys.tools import Tool
 from fivewhys.tools._render import (
     MAX_RESPONSE_CHARS,
     blank_result,
-    fit_lines,
     render_block,
     unknown_service,
 )
@@ -170,29 +169,26 @@ def build_query_logs_tool(store: LogStore, *, services: Sequence[str] = ()) -> T
                 ),
             )
 
-        lines, truncated = fit_lines(
-            (
+        meta = f"服务={service}  时间={window}  级别={level_text}"
+        if keyword:
+            meta += f"  关键字={keyword}"
+
+        # 摘要只说命中多少条；被截断时由 truncated_note 说明「这是部分结果」。
+        # 不再写「显示 M 条」—— M 是 render_block 内部裁剪的结果，
+        # 在调用方算一遍就成了两处记账（正是 FIV-D 类 bug 的温床）。
+        return render_block(
+            f"共命中 {total} 条",
+            truncated_note=(
+                f"（结果被截断：limit={limit}，单次返回预算 {MAX_RESPONSE_CHARS} 字符。"
+                "如需更多请缩小时间窗口或加关键字）"
+            ),
+            meta=meta,
+            rows=(
                 f"{entry.ts:%H:%M:%S} {entry.level.value:<5} {entry.message}"
                 + (f"  trace={entry.trace_id}" if entry.trace_id else "")
                 for entry in matched
             ),
             limit=limit,
-        )
-
-        meta = f"服务={service}  时间={window}  级别={level_text}"
-        if keyword:
-            meta += f"  关键字={keyword}"
-
-        return render_block(
-            f"共命中 {total} 条，显示 {len(lines)} 条",
-            note=(
-                f"（受 limit={limit} 和 {MAX_RESPONSE_CHARS} 字符预算限制，"
-                "如需更多请缩小时间窗口或加关键字）"
-                if truncated
-                else None
-            ),
-            meta=meta,
-            lines=lines,
         )
 
     return Tool(

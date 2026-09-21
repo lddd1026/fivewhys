@@ -68,7 +68,7 @@ def build_get_dependencies_tool(topology: dict[str, list[str]]) -> Tool:
             return render_block(
                 f"共 {len(topology)} 个服务",
                 meta="完整拓扑（箭头表示「调用」）",
-                lines=lines,
+                rows=lines,
             )
 
         if service not in topology:
@@ -103,7 +103,7 @@ def build_get_dependencies_tool(topology: dict[str, list[str]]) -> Tool:
         return render_block(
             f"{service}：{len(downstreams)} 个下游，{len(upstreams)} 个上游",
             meta=f"服务={service}",
-            lines=lines,
+            rows=lines,
         )
 
     return Tool(
