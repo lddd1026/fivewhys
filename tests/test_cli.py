@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,8 @@ from fivewhys.cli import app
 from fivewhys.config import get_settings
 from fivewhys.mock.injectors import available
 from fivewhys.snapshot import build_snapshot, combine_digests, load_snapshot, save_snapshot
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 runner = CliRunner()
 
@@ -109,6 +112,73 @@ def test_doctor_warns_when_env_file_missing(
 
     assert result.exit_code == 0
     assert "未找到" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# ⭐ .env 里的 provider key 必须真的进到进程环境里（FIV-D2）
+#
+# 这条以前是坏的：`SettingsConfigDict(env_file=".env")` 只服务它自己的字段
+# （FIVWHYS_* 那些），而 DEEPSEEK_API_KEY 是 **litellm 从 os.environ 读的**。
+# 用户照着 README「cp .env.example .env 填上 key」做完，key 被静默忽略，
+# 然后收到一个莫名其妙的鉴权失败。
+#
+# 用子进程测：它精确复现用户的做法（一个放着 .env 的目录 + 跑 python），
+# 而且不碰当前进程的模块状态。
+# --------------------------------------------------------------------------
+
+
+def test_env_file_key_reaches_the_process_environment(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("DEEPSEEK_API_KEY=sk-from-dotenv\n", encoding="utf-8")
+
+    env = {key: value for key, value in os.environ.items() if key != "DEEPSEEK_API_KEY"}
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+    env["PYTHONUTF8"] = "1"
+
+    result = subprocess.run(  # noqa: S603 —— 参数是我们自己拼的
+        [
+            sys.executable,
+            "-c",
+            "import os, fivewhys.config; print(os.environ.get('DEEPSEEK_API_KEY'))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sk-from-dotenv", (
+        "只写进 .env 的 key 没有进 os.environ —— litellm 拿不到它，用户会收到莫名其妙的鉴权失败"
+    )
+
+
+def test_real_environment_variable_wins_over_the_env_file(tmp_path: Path) -> None:
+    """真实环境变量要压过 .env —— CI 注入的凭据、临时导出的变量都该赢。"""
+    (tmp_path / ".env").write_text("DEEPSEEK_API_KEY=sk-from-dotenv\n", encoding="utf-8")
+
+    env = {**os.environ, "DEEPSEEK_API_KEY": "sk-from-real-env"}
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+    env["PYTHONUTF8"] = "1"
+
+    result = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            "import os, fivewhys.config; print(os.environ.get('DEEPSEEK_API_KEY'))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+
+    assert result.stdout.strip() == "sk-from-real-env"
 
 
 def test_doctor_fails_when_a_dependency_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

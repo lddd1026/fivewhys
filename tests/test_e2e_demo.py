@@ -54,12 +54,31 @@ def test_env_var_prefix_is_fivewhys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _run_demo(
-    base_url: str | None, *args: str, with_key: bool = True
+    base_url: str | None,
+    *args: str,
+    with_key: bool = True,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """在子进程里跑 demo。
+
+    ⚠️ ``cwd`` 是有意义的，不只是路径问题：``.env`` 是按**当前目录**找的。
+    默认在项目根目录跑（找得到 ``.env``）；要测「没有任何 key」的场景，
+    必须换到一个**没有 .env 的目录**去 —— 光从环境变量里删掉 key 不够，
+    因为 ``.env`` 会把它补回来（FIV-D2 之后它真的会生效了）。
+    """
     env = {key: value for key, value in os.environ.items() if key != "DEEPSEEK_API_KEY"}
     env["PYTHONUTF8"] = "1"
     if with_key:
         env["DEEPSEEK_API_KEY"] = "sk-fake-for-local-test"
+    else:
+        # ⚠️ 故意设成**空字符串**，而不是删掉它。
+        #
+        # 删掉没用：`load_dotenv(override=False)` 会把项目根目录 `.env` 里的
+        # 真实 key 补回来（python-dotenv 的 find_dotenv 会从调用它的文件出发
+        # 逐级向上找，所以换 cwd 也躲不掉）。
+        # 而空字符串正好就是一个**真实存在**的情形：
+        # 用户 `cp .env.example .env` 但忘了填 key —— 模板里那行就是空的。
+        env["DEEPSEEK_API_KEY"] = ""
     if base_url:
         # ⚠️ 前缀是 FIVEWHYS_（五个字母 five + whys）。
         # 写成 FIVWHYS_ 不会报错，只会静默失效 —— settings.api_base 保持 None，
@@ -68,8 +87,8 @@ def _run_demo(
         env["FIVEWHYS_API_BASE"] = base_url
 
     return subprocess.run(  # noqa: S603 —— 参数是我们自己拼的，不是外部输入
-        [sys.executable, "scripts/demo_m1.py", *args],
-        cwd=PROJECT_ROOT,
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "demo_m1.py"), *args],
+        cwd=cwd or PROJECT_ROOT,
         env=env,
         capture_output=True,
         text=True,
@@ -134,9 +153,13 @@ def test_demo_walks_the_whole_evidence_chain_through_the_loop() -> None:
     assert "M1 验收通过" in result.stdout
 
 
-def test_demo_fails_cleanly_without_api_key() -> None:
-    """缺 key 时要给出能照着做的提示，而不是抛一堆栈。"""
-    result = _run_demo(None, "--runs", "1", with_key=False)
+def test_demo_fails_cleanly_without_api_key(tmp_path: Path) -> None:
+    """缺 key 时要给出能照着做的提示，而不是抛一堆栈。
+
+    在一个**没有 .env 的目录**里跑：`.env` 会提供 key，所以光删环境变量不够。
+    这同时更贴近真实场景 —— 陌生人 clone 下来还没配 key 的时候。
+    """
+    result = _run_demo(None, "--runs", "1", with_key=False, cwd=tmp_path)
 
     assert result.returncode == 1
     assert "缺少 DEEPSEEK_API_KEY" in result.stdout

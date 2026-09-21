@@ -93,6 +93,22 @@
 
 ### 缺陷（发现问题立刻记录，不夹带在别的任务里）
 
+- [x] **FIV-D2** `.env` 里的 provider key 根本没进进程环境 · ✅ 已完成
+  - **发现方式**：第一次拿真实 key 跑 demo —— `fivewhys doctor` 显示
+    「未设置 DEEPSEEK_API_KEY」，而 `.env` 明明就在那儿
+  - **原因**：`SettingsConfigDict(env_file=".env")` **只服务它自己的字段**
+    （`FIVEWHYS_*` 那些）。`DEEPSEEK_API_KEY` 不是 Settings 的字段 ——
+    它是 **litellm 从 `os.environ` 里读的**。而全项目没有任何地方调 `load_dotenv()`：
+    `python-dotenv` 自 M0 起就写在依赖里，却从来没被 import 过
+  - **后果**：README / DEV 里那句「`cp .env.example .env` 然后填上 key」
+    **是条死路** —— key 被静默忽略，用户会收到一个莫名其妙的鉴权失败。
+    直接违反 G4（陌生人 5 分钟内跑出结果）
+  - **修法**：`config.py` 在构造 Settings 之前 `load_dotenv(override=False)`。
+    真实环境变量优先于 `.env`（CI 凭据、临时导出的变量都该赢）
+  - **为什么离线测试全绿也没发现**：测试全都直接 `monkeypatch.setenv` 设环境变量，
+    从来不经过 `.env` 这条路。**只有真按用户的步骤走一遍才会撞上。**
+    现在补了两个子进程测试，精确复现「一个放着 .env 的目录 + 跑 python」
+
 - [x] **FIV-D1** 故障期间下游服务**完全没有流量** · ✅ 已完成
   - 提交：`50af7c1 fix(mock): 故障期间的背景流量改走完整调用链`
   - **证据**（FIV-13 手工检查工具输出时发现）：

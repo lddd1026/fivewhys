@@ -4,13 +4,30 @@
 
 为什么要这样：配置项散落在各处是 agent 项目失控的第一步 —— 你会不知道
 「到底用的是哪个模型、哪个温度」跑出来的那组评测数字。
+
+## 为什么这里要显式 load_dotenv（FIV-D2）
+
+``SettingsConfigDict(env_file=".env")`` **只服务它自己的字段**（``FIVEWHYS_*`` 那些）。
+``DEEPSEEK_API_KEY`` 不是 Settings 的字段 —— 它是 **litellm 从 ``os.environ`` 里读的**。
+
+所以如果不显式把 ``.env`` 灌进进程环境，用户照着 README
+「``cp .env.example .env`` 然后填上 key」做完，key 会被**静默忽略**，
+然后收到一个莫名其妙的鉴权失败。这个 bug 是第一次拿真实 key 跑 demo 时发现的。
+
+> ``override=False``（默认值）是有意的：真实环境变量优先于 ``.env``。
+> CI 里注入的凭据、命令行临时导出的变量都应该压过本地文件。
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ⚠️ 必须在 Settings 被构造**之前**执行 —— 见模块 docstring。
+# import fivewhys.config 就会触发它，所以 CLI / demo / 测试都覆盖到了。
+load_dotenv(override=False)
 
 
 class Settings(BaseSettings):
