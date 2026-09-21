@@ -216,6 +216,7 @@ def trace_cmd(
         f"  结果      : {info['stop_reason']}"
         + (f"  [red]{info['error']}[/red]" if info["error"] else "")
     )
+    console.print(f"  追问层数  : {info.get('why_depth', 0)} 层（上限见 FIVEWHYS_MAX_WHY_DEPTH）")
     if info.get("stop_note"):
         console.print(f"  停止原因  : [yellow]{info['stop_note']}[/yellow]")
     console.print(
