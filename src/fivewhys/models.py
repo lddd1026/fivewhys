@@ -32,9 +32,16 @@ from pydantic import BaseModel, Field
 class FaultCategory(StrEnum):
     """故障类别。
 
-    故意做成可枚举的：自动判分要靠它，做成自由文本就没法比对了。
+    故意做成可枚举的：自动判分要靠它（需求 §6.1 用枚举精确匹配），
+    做成自由文本就没法比对了。
+
     M3 会把这里扩到 20 种。
     """
+
+    # 正常场景：系统健康，没有故障。
+    # 用途是测「误报率」—— 一个永远报故障的诊断工具没人敢用。
+    # 见需求 §10.2。
+    NO_FAULT = "no_fault"
 
     DB_POOL_EXHAUSTED = "db_pool_exhausted"
     SLOW_QUERY = "slow_query"
