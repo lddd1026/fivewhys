@@ -32,13 +32,22 @@ classifiers = [
 ]
 
 # ---- 运行时依赖（M0/M1 只需要这些，保持精简）----
+#
+# ⚠️ 约束策略（上线前审查 PRE-6）：
+#   - **下界写我们真正验证过的版本**，不是想当然的低版本。
+#     原先写 `litellm>=1.0` 是错的 —— 我们用到的
+#     `suppress_debug_info` / `_hidden_params["response_cost"]` /
+#     `acompletion(timeout=...)` 都不是 1.0 就有的。
+#     声称支持一个从没跑过的版本，等于把问题留给第一个装它的人。
+#   - **上界卡主版本**：允许同一主版本内的修复，但不让一次大版本升级
+#     在半夜悄悄改掉行为（评测数字必须能复现）。
 dependencies = [
-    "litellm>=1.0",           # 一个接口通 100+ 家模型，方便做模型路由对比
-    "pydantic>=2.9",          # 结构化输出的核心武器，不是配菜
-    "pydantic-settings>=2.6", # 配置与环境变量统一收口
-    "typer>=0.15",            # CLI
-    "rich>=13.9",             # 终端输出
-    "python-dotenv>=1.0",     # 读取 .env
+    "litellm>=1.101,<2",      # 一个接口通 100+ 家模型，方便做模型路由对比
+    "pydantic>=2.9,<3",       # 结构化输出的核心武器，不是配菜
+    "pydantic-settings>=2.6,<3", # 配置与环境变量统一收口
+    "typer>=0.15,<1",         # CLI
+    "rich>=13.9,<16",         # 终端输出
+    "python-dotenv>=1.0,<2",  # 读取 .env
 ]
 
 [project.optional-dependencies]

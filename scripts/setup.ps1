@@ -110,15 +110,24 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- 6. 验证 ----
 Write-Host "`n=== 验证 ===" -ForegroundColor Green
+# ⚠️ 别用 `litellm.__version__` —— 它没有这个属性，会抛 AttributeError。
+# 实测：安装成功之后，脚本自己在这里甩一段 traceback 出来，
+# 用户会以为装失败了（上线前审查发现的）。用 importlib.metadata 才是对的，
+# 而且整个验证块包一层 try，免得以后哪个库改接口又在"装好了"的时候吓人一跳。
 & $VenvPy -c @"
-import fivewhys, pydantic
-print('fivewhys ', fivewhys.__version__)
-print('pydantic ', pydantic.VERSION)
+import importlib.metadata as md
+
 try:
-    import litellm
-    print('litellm  ', litellm.__version__)
-except ImportError:
-    print('litellm   (未安装)')
+    import fivewhys
+    print('fivewhys ', fivewhys.__version__)
+except Exception as exc:                      # noqa: BLE001
+    print('fivewhys  导入失败:', exc)
+
+for name in ('pydantic', 'litellm', 'typer', 'rich'):
+    try:
+        print(f'{name:10s}', md.version(name))
+    except md.PackageNotFoundError:
+        print(f'{name:10s} (未安装)')
 "@
 
 Write-Host "`n安装完成。下一步：" -ForegroundColor Green

@@ -86,8 +86,15 @@ M1 验收通过：agent 能自己查出根因。
 | 平台 | 在 Windows + PowerShell 上开发与验证；纯 Python 部分不依赖平台（场景包强制 LF 换行）。`scripts/*.ps1` 是 PowerShell 脚本，Linux/macOS 用等价的 `python -m venv .venv && .venv/bin/pip install -e ".[dev]"` |
 | 实测依赖版本 | `litellm==1.101.0` · `pydantic==2.13.5` · `pydantic-settings==2.15.0` · `typer==0.27.2` · `rich==15.0.0` · `python-dotenv==1.2.3`（评测数字是在这一组版本上跑出来的） |
 
+> 依赖约束是「**下界 = 实测过的版本，上界 = 下一个主版本**」（`litellm>=1.101,<2`）。
+> 原先写的 `litellm>=1.0` 是错的：我们用到的 `suppress_debug_info`、
+> `_hidden_params["response_cost"]`、`acompletion(timeout=...)` 都不是 1.0 就有的 ——
+> 声称支持一个从没跑过的版本，等于把问题留给第一个装它的人。
+> 所以全新安装可能拿到同一主版本内更新的 `litellm`（实测 1.102.0）；
+> 要完全复现上面的数字，就装回 `litellm==1.101.0`。
+
 > ⚠️ 如果 `setup.ps1` 报 403 / 构建依赖安装失败：镜像偶尔会对 `hatchling`
-> 返回 403。换官方源重试即可：
+> 返回 403。脚本现在会**自动换官方源重试一次**；手动重试的命令是
 > `pwsh -File scripts/setup.ps1 -IndexUrl https://pypi.org/simple`
 
 ## 架构
