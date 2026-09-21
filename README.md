@@ -67,13 +67,14 @@ fivewhys/
 │   ├── config.py        # 配置收口
 │   ├── cli.py           # 命令行入口
 │   ├── agent/           # agent 主循环与提示词
-│   ├── tools/           # 排障工具（按 SRE 路径切分，不按数据源切分）
+│   ├── tools/           # 排障工具（当前按数据源切分；"按 SRE 路径切分更好"是待验证的假设）
 │   └── mock/            # 可注入故障的模拟系统
 ├── tests/
 ├── benchmarks/          # 评测执行器与结果（M6）
 └── docs/
     ├── REQUIREMENTS.md  # 需求说明：要什么、为什么、做到什么算完成
-    ├── ROADMAP.md       # 九个里程碑与验收标准
+    ├── DESIGN.md        # 设计方案对比：每个目标的候选方案与取舍
+    ├── ROADMAP.md       # 9 个目标与验收标准
     ├── TASKS.md         # 任务看板
     ├── WORKFLOW.md      # 每个任务的 7 步开发流程
     └── DEV.md           # 环境约定（不装 C 盘等）
@@ -84,7 +85,9 @@ fivewhys/
 ```
 REQUIREMENTS.md   要什么、为什么          ← 上游，稳定
       ↓
-ROADMAP.md        分几步做、验收标准
+DESIGN.md         怎么做、为什么这么选     ← 技术选型与取舍
+      ↓
+ROADMAP.md        9 个目标、验收标准
       ↓
 TASKS.md          具体任务
       ↓

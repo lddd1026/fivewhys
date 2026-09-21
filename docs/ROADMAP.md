@@ -1,6 +1,7 @@
 # fivewhys 目标清单
 
 > 上游：[REQUIREMENTS.md](REQUIREMENTS.md)（15 条功能需求 + 11 条非功能需求 + 7 条约束）
+> 横向：[DESIGN.md](DESIGN.md)（每个目标的技术选型与取舍）
 > 下游：[TASKS.md](TASKS.md)（具体任务）
 >
 > 本文档把需求拆成 **9 个可独立验收的小目标**。每个目标回答三个问题：
