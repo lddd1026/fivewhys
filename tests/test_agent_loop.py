@@ -36,11 +36,19 @@ def _registry() -> ToolRegistry:
 
 
 def _settings(**overrides: object) -> Settings:
+    """这个文件测的是**循环机制**（停止条件、错误回喂、消息格式）。
+
+    ⚠️ 所以默认把 `verify_evidence` 关掉：FIV-17 之后，带着「引用了一次
+    从没发生过的工具调用」的结论会被拒绝（那正是它该做的），
+    而下面这些用例的脚本只关心「提交之后循环停不停」，不关心证据政策。
+    证据校验本身在 tests/test_evidence.py 里测，并且**用的是默认值**。
+    """
     base: dict[str, object] = {
         "max_steps": 5,
         "max_cost_usd": 1.0,
         "max_why_depth": 5,
         "temperature": 0.0,
+        "verify_evidence": False,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[call-arg]
