@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,6 +82,17 @@ class Settings(BaseSettings):
 
     # 温度。0 是为了让诊断尽量可复现
     temperature: float = 0.0
+
+    # ---- 轨迹落盘（需求 FR-9）----
+    #
+    # 默认**开着**：需求写的是「每次诊断**必须**落盘完整轨迹」，
+    # 而「默认关掉、出事再开」等于永远拿不到出事的证据 ——
+    # 上线前审查里那次没查明原因的失败就是这么来的。
+    #
+    # 测试里在 conftest.py 里设成 false（测试不该往仓库写运行时数据），
+    # 要测轨迹本身的用例自己开（见 tests/test_trace.py）。
+    trace_enabled: bool = True
+    trace_root: Path = Path("runs")
 
 
 @lru_cache

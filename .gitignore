@@ -36,6 +36,8 @@ credentials.*
 # 场景快照、trace、评测结果、生成的简历式报告都在这里，不进版本库
 data/*
 !data/.gitkeep
+# 诊断轨迹（FIV-19）：一次 5 步诊断约 150KB，100 次评测约 15MB —— 运行时数据，不进版本库
+runs/
 benchmarks/out/
 benchmarks/*.json
 !benchmarks/.gitkeep

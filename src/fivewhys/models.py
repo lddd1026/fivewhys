@@ -182,6 +182,12 @@ class AgentRun(BaseModel):
 
     scenario_id: str
     model: str
+    # 这次运行的标识。轨迹落在 runs/<run_id>/trace.jsonl（需求 FR-9）。
+    run_id: str = ""
+    trace_path: str | None = Field(
+        default=None,
+        description="轨迹文件路径。None 表示这次没落盘（trace 被关掉了）",
+    )
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
     steps: int = 0

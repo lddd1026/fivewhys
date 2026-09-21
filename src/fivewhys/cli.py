@@ -32,6 +32,14 @@ from fivewhys.snapshot import (
     validate_all_scenarios,
     verify_snapshot,
 )
+from fivewhys.trace import (
+    DEFAULT_TRACE_ROOT,
+    EVENT_RESPONSE,
+    EVENT_TOOL_RESULT,
+    find_run,
+    read_events,
+    summarize,
+)
 
 app = typer.Typer(
     name="fivewhys",
@@ -172,6 +180,127 @@ def _print_problems(title: str, problems: list[str]) -> None:
     console.print(f"[red]{title}[/red]")
     for problem in problems:
         console.print(Padding(problem, (0, 0, 0, 4)))
+
+
+@app.command("trace")
+def trace_cmd(
+    run_ref: str = typer.Argument(
+        "latest",
+        help="run_id（可以只写前缀），或者 latest 看最近一次",
+    ),
+    root: Path = typer.Option(  # noqa: B008
+        DEFAULT_TRACE_ROOT,
+        "--root",
+        "-r",
+        help="轨迹根目录",
+    ),
+    full: bool = typer.Option(False, "--full", help="打印每一步的完整内容（很长）"),
+) -> None:
+    """看一次诊断的完整轨迹（需求 FR-9）。
+
+    为什么要有这个命令：审查报告里那条没查明的失败，教训是
+    **「轨迹落盘了但没人读」等于没落盘**。参数一给，
+    人就能一眼看出模型每一步看到了什么、调了什么、最后交了什么。
+    """
+    try:
+        path = find_run(run_ref, root=root)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    info = summarize(path)
+    console.print(f"[bold]{info['run_id']}[/bold]")
+    console.print(f"  问题      : {info['question']}")
+    console.print(f"  模型      : {info['model']}")
+    console.print(
+        f"  结果      : {info['stop_reason']}"
+        + (f"  [red]{info['error']}[/red]" if info["error"] else "")
+    )
+    console.print(
+        f"  规模      : {info['steps']} 步 / {info['tool_calls']} 次工具调用"
+        f"（失败 {info['failed_tool_calls']}）"
+    )
+    console.print(
+        f"  成本/耗时 : ${info['total_cost_usd']:.4f} / "
+        f"{info['duration_s']:.1f}s   token {info['total_tokens']}"
+    )
+    if info["broken_lines"]:
+        console.print(f"  [yellow]坏行 {info['broken_lines']} 条（写到一半断了）[/yellow]")
+    if not info["has_finish"]:
+        console.print("  [yellow]没有收尾事件 —— 这次运行是被打断的[/yellow]")
+
+    console.print()
+    console.print(_trace_table(path, full=full))
+
+    if info["diagnosis"]:
+        console.print()
+        console.print("[bold]最终结论[/bold]")
+        console.print(f"  根因      : {info['diagnosis']['root_cause']}")
+        console.print(
+            f"  服务/类别 : {info['diagnosis']['root_cause_service']}"
+            f" / {info['diagnosis']['fault_category']}"
+        )
+        console.print(f"  摘要      : {info['diagnosis']['summary']}")
+    console.print(f"\n[dim]原始文件：{path}[/dim]")
+
+
+def _trace_table(path: Path, *, full: bool) -> Table:
+    """逐步表格：**把「调用」和它的「结果」配成对**。
+
+    为什么要配对：轨迹里 response 和 tool_result 是分开的事件，
+    直接按顺序打印会变成「三步的调用排在一起、三步的结果又排在一起」，
+    人读的时候对不上号 —— 而「哪个结果对应哪次调用」正是复盘的第一件事。
+    """
+    table = Table(header_style="bold")
+    table.add_column("步", justify="right", no_wrap=True)
+    table.add_column("动作", no_wrap=True)
+    table.add_column("内容", overflow="fold", max_width=90)
+
+    pending: list[tuple[int, dict[str, str]]] = []
+    for event in read_events(path):
+        kind = event.get("kind")
+
+        if kind == EVENT_RESPONSE and event.get("tool_calls"):
+            pending.extend((int(event["step"]), call) for call in event["tool_calls"])
+            continue
+
+        if kind == EVENT_TOOL_RESULT:
+            if pending:
+                step, call = pending.pop(0)
+            else:  # pragma: no cover —— 正常轨迹里结果总是跟着调用
+                step, call = (
+                    int(event.get("step", 0)),
+                    {"name": str(event.get("tool", "?")), "arguments": ""},
+                )
+            table.add_row(
+                str(step), f"[cyan]{call['name']}[/cyan]", _clip(call.get("arguments"), full)
+            )
+            table.add_row(
+                "",
+                "  ↳ [green]OK[/green]" if event.get("ok") else "  ↳ [red]FAIL[/red]",
+                _clip(event.get("result") if event.get("ok") else event.get("error"), full),
+            )
+            continue
+
+        if kind == EVENT_RESPONSE and event.get("content"):
+            table.add_row(str(event["step"]), "[dim]说话[/dim]", _clip(event["content"], full))
+        elif kind == "broken":
+            table.add_row("", "[yellow]坏行[/yellow]", _clip(event.get("raw"), full))
+
+    # 没有结果的调用（比如中途崩了）也要显示，不能悄悄吞掉
+    for step, call in pending:
+        table.add_row(str(step), f"[cyan]{call['name']}[/cyan]", _clip(call.get("arguments"), full))
+        table.add_row("", "  ↳ [yellow]无结果[/yellow]", "（这一步没执行完）")
+
+    return table
+
+
+def _clip(text: object, full: bool, limit: int = 90) -> str:
+    body = str(text or "")
+    if full:
+        return body
+    first = body.splitlines()[0] if body else ""
+    return first[:limit]
 
 
 @app.command("faults")
