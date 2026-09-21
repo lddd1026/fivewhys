@@ -196,6 +196,26 @@ async def test_tools_are_sent_with_auto_choice(client: Any) -> None:
     assert instance.captured["temperature"] == 0.0
 
 
+async def test_api_base_is_forwarded_when_set(client: Any) -> None:
+    """自定义端点要真的传下去 —— 否则请求会打到官方接口上。
+
+    这是本地假 LLM 服务能工作的前提（端到端测试就靠它）。
+    """
+    instance = client(lambda _: FakeResponse(FakeMessage("ok", None)))
+    instance.api_base = "http://127.0.0.1:9"
+    await instance.complete([], [])
+
+    assert instance.captured["api_base"] == "http://127.0.0.1:9"
+
+
+async def test_api_base_is_omitted_when_none(client: Any) -> None:
+    """没设置时不能传 api_base=None —— 部分 provider 会因此报错。"""
+    instance = client(lambda _: FakeResponse(FakeMessage("ok", None)))
+    await instance.complete([], [])
+
+    assert "api_base" not in instance.captured
+
+
 def test_local_cost_map_is_enabled(client: Any) -> None:
     """离线价格表开关必须在 import litellm 之前设上。
 

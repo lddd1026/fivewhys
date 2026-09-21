@@ -87,13 +87,20 @@ class LiteLLMClient:
     本模块的 dataclass 定义，不需要真的连模型。
     """
 
-    def __init__(self, *, model: str, temperature: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        temperature: float = 0.0,
+        api_base: str | None = None,
+    ) -> None:
         # 离线价格表的开关在**模块级**设置 —— 见文件顶部。放在这里会太晚。
         import litellm
 
         self._litellm = litellm
         self.model = model
         self.temperature = temperature
+        self.api_base = api_base
 
     async def complete(
         self,
@@ -105,6 +112,9 @@ class LiteLLMClient:
             "messages": list(messages),
             "temperature": self.temperature,
         }
+        # 只在设置了才传：传 None 会让部分 provider 报错
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
         # 没有工具时不要传 tools=[]，部分 provider 会报错
         if tools:
             kwargs["tools"] = list(tools)

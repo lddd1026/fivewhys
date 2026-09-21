@@ -136,7 +136,7 @@ def show_trace(run: AgentRun) -> None:
 # --------------------------------------------------------------------------
 
 
-async def run_one(seed: int, show_trace: bool) -> tuple[AgentRun, float, list[str]]:
+async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
     store, truth, question = build_scenario(seed)
     run = await diagnose(
         scenario_id=truth.scenario_id,
@@ -145,7 +145,11 @@ async def run_one(seed: int, show_trace: bool) -> tuple[AgentRun, float, list[st
         settings=get_settings(),
     )
 
-    if show_trace:
+    # 注意参数名叫 trace 而不是 show_trace ——
+    # 叫 show_trace 会把模块级的 show_trace() 函数遮蔽掉，
+    # 变成 "TypeError: 'bool' object is not callable"。
+    # 这个 bug 是端到端测试发现的：--offline 不走这里，单测也不跑脚本。
+    if trace:
         show_trace(run)
 
     if run.diagnosis is None:
