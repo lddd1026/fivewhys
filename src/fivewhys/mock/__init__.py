@@ -4,22 +4,45 @@
   因为我们**必须掌握 ground truth**。用真系统就没法知道「正确答案」是什么，
   没有正确答案就没有自动判分，整个项目就退化成 demo。
 
-三层组织：
+五类数据，各有各的分工：
 
-- :class:`MockService`  —— 单个服务，只会产生日志
-- :class:`MockSystem`   —— 一组互相调用的服务 + 拓扑，生成跨服务的请求日志
-- :class:`MetricStore`  —— 按时间桶聚合的指标，**与日志同源**
+- :class:`LogStore`     —— 日志：「发生了什么」
+- :class:`MetricStore`  —— 指标：「影响有多大」（**与日志同源**）
+- :class:`ConfigStore`  —— 配置历史：「**根因在这里**」
+- :class:`DeployStore`  —— 发布历史：「什么时候动过手」
+- :class:`MockSystem`   —— 拓扑 + 跨服务流量生成
 
-M1 只用 MockService（一个服务）。M2 起用后两者。
+配置这一类尤其关键：真正的答案（``db.pool_size`` 50 -> 5）**不在日志里**，
+日志只说「config reloaded」。agent 必须先怀疑到「配置变过」，才会去查它。
+
+M1 只用 MockService（一个服务）。M2 起用其余部分。
 """
 
+from fivewhys.mock.changes import (
+    ConfigChange,
+    ConfigSnapshot,
+    ConfigStore,
+    DeployRecord,
+    DeployStore,
+)
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricBucket, MetricStore, RequestSample
 from fivewhys.mock.service import MockService
-from fivewhys.mock.topology import DEFAULT_TOPOLOGY, MockSystem, ServiceSpec
+from fivewhys.mock.topology import (
+    DEFAULT_CONFIGS,
+    DEFAULT_TOPOLOGY,
+    MockSystem,
+    ServiceSpec,
+)
 
 __all__ = [
+    "DEFAULT_CONFIGS",
     "DEFAULT_TOPOLOGY",
+    "ConfigChange",
+    "ConfigSnapshot",
+    "ConfigStore",
+    "DeployRecord",
+    "DeployStore",
     "LogStore",
     "MetricBucket",
     "MetricStore",

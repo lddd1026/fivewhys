@@ -55,6 +55,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from fivewhys.mock.changes import ConfigStore
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
@@ -85,6 +86,7 @@ def inject_db_pool_exhausted(
     at: datetime,
     *,
     metrics: MetricStore | None = None,
+    configs: ConfigStore | None = None,
 ) -> GroundTruth:
     """注入「数据库连接池耗尽」故障。
 
@@ -96,8 +98,14 @@ def inject_db_pool_exhausted(
             （错误率上升、P95 延迟飙升）。不传则只写日志。
 
             为什么要有这个参数：日志说「发生了什么」、指标说「影响有多大」，
-            两者必须说的是同一件事。如果故障只出现在日志里、指标却一片正常，
+            两者必须说的是同一件事。故障只出现在日志里、指标却一片正常的话，
             agent 会被带偏 —— 它会认为「监控没报警，问题不大」。
+        configs: 配置历史仓库。传了的话，会记下**真正的根因** ——
+            ``db.pool_size`` 从 50 变成 5。
+
+            这是整个场景里最关键的一条证据，因为它**不在日志里**：
+            日志只说「config reloaded」，不说改了什么。
+            agent 必须先怀疑到「配置变过」，才会去查它 —— 这就是推理。
 
     Returns:
         这个场景的 ground truth，供评测判分使用。
@@ -106,6 +114,18 @@ def inject_db_pool_exhausted(
     # 场景必须可复现 —— 否则无法比较「改进前后」的效果差异。
     rng = service.rng
     end = at + _FAULT_DURATION
+
+    # ---- 根因：配置变更。时间点与下面那条 INFO 日志严格对齐 ----
+    if configs is not None:
+        current = configs.latest(service.name, at)
+        values = dict(current.values) if current else {}
+        values["db.pool_size"] = 5
+        configs.record_values(
+            at - timedelta(seconds=2),
+            service.name,
+            values,
+            note="config reloaded from /etc/order-service/app.yaml",
+        )
 
     # 先收集成事件列表，最后统一排序写入。
     # 为什么要这样：故障现象和背景噪声是交错生成的，只有排序才能保证

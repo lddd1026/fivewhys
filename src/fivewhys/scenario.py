@@ -44,6 +44,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from fivewhys.mock.changes import ConfigStore, DeployStore
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.scenarios import inject_db_pool_exhausted
@@ -53,6 +54,8 @@ from fivewhys.models import GroundTruth
 MANIFEST_NAME = "scenario.json"
 LOGS_NAME = "logs.jsonl"
 METRICS_NAME = "metrics.jsonl"
+CONFIGS_NAME = "configs.jsonl"
+DEPLOYS_NAME = "deploys.jsonl"
 
 # 默认存放位置。已在 .gitignore 里（data/*）。
 DEFAULT_SCENARIO_ROOT = Path("data/scenarios")
@@ -81,6 +84,8 @@ class Scenario:
     manifest: ScenarioManifest
     logs: LogStore
     metrics: MetricStore
+    configs: ConfigStore
+    deploys: DeployStore
 
     # ---- 便捷访问 ----
 
@@ -128,6 +133,18 @@ class Scenario:
             problems.append("日志为空")
         if len(self.metrics) == 0:
             problems.append("指标为空")
+        if len(self.configs) == 0:
+            problems.append("配置历史为空")
+
+        # 故障场景的配置历史里必须真的有变化 —— 那是根因所在。
+        # 如果配置从头到尾没变过，agent 查了也白查，这个场景是坏的。
+        if truth.fault_category != "no_fault":
+            changes = self.configs.changes(truth.root_cause_service)
+            if not changes:
+                problems.append(
+                    f"故障场景的配置历史里没有任何变化（根因服务 "
+                    f"{truth.root_cause_service}）—— 根因证据缺失"
+                )
 
         # 拓扑要覆盖根因服务
         if self.topology and truth.root_cause_service not in self.topology:
@@ -158,6 +175,8 @@ class Scenario:
         )
         self.logs.dump_jsonl(target / LOGS_NAME)
         self.metrics.dump_jsonl(target / METRICS_NAME)
+        self.configs.dump_jsonl(target / CONFIGS_NAME)
+        self.deploys.dump_jsonl(target / DEPLOYS_NAME)
         return target
 
     @classmethod
@@ -168,17 +187,26 @@ class Scenario:
             raise FileNotFoundError(f"场景包里没有 {MANIFEST_NAME}：{path}")
 
         manifest = ScenarioManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+
+        def _optional(loader: object, name: str) -> object:
+            """配置文件可能来自旧版本场景包，缺了就当空。"""
+            target = path / name
+            return loader(target) if target.exists() else None  # type: ignore[operator]
+
         return cls(
             manifest=manifest,
             logs=LogStore.load_jsonl(path / LOGS_NAME),
             metrics=MetricStore.load_jsonl(path / METRICS_NAME),
+            configs=_optional(ConfigStore.load_jsonl, CONFIGS_NAME) or ConfigStore(),  # type: ignore[arg-type]
+            deploys=_optional(DeployStore.load_jsonl, DEPLOYS_NAME) or DeployStore(),  # type: ignore[arg-type]
         )
 
     def summary(self) -> str:
         """一行摘要，给人看的。"""
         return (
-            f"{self.scenario_id}  日志 {len(self.logs)} 条  "
-            f"指标 {len(self.metrics)} 条  服务 {len(self.topology)} 个"
+            f"{self.scenario_id}  日志 {len(self.logs)} 条  指标 {len(self.metrics)} 条  "
+            f"配置快照 {len(self.configs)} 条  发布 {len(self.deploys)} 条  "
+            f"服务 {len(self.topology)} 个"
         )
 
 
@@ -208,15 +236,15 @@ def build_db_pool_scenario(
     fault_at = base + timedelta(minutes=warmup_minutes)
 
     logs = LogStore()
-    metrics = MetricStore()
-    system = MockSystem(logs, metrics=metrics, seed=seed)
+    system = MockSystem(logs, seed=seed)
     system.normal_operation(base, fault_at, rps=rps)
 
     truth = inject_db_pool_exhausted(
         logs,
         system.service("order-service"),
         fault_at,
-        metrics=metrics,
+        metrics=system.metrics,
+        configs=system.configs,
     )
 
     question = f"order-service 从 {fault_at:%H:%M} 前后开始错误率飙升，帮忙定位一下原因"
@@ -229,12 +257,16 @@ def build_db_pool_scenario(
             topology=system.describe(),
         ),
         logs=logs,
-        metrics=metrics,
+        metrics=system.metrics,
+        configs=system.configs,
+        deploys=system.deploys,
     )
 
 
 __all__ = [
+    "CONFIGS_NAME",
     "DEFAULT_SCENARIO_ROOT",
+    "DEPLOYS_NAME",
     "LOGS_NAME",
     "MANIFEST_NAME",
     "MANIFEST_VERSION",
