@@ -17,9 +17,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    # 只在类型检查时导入，运行时不导入 —— 否则
+    # tools -> mock.logstore -> ... 会形成循环
+    from fivewhys.mock.logstore import LogStore
 
 
 @dataclass(frozen=True)
@@ -83,4 +88,27 @@ class ToolRegistry:
         return name in self._tools
 
 
-__all__ = ["Tool", "ToolRegistry"]
+def build_registry(store: LogStore) -> ToolRegistry:
+    """组装 agent 可用的全部工具。
+
+    这是「工具集合的唯一入口」：改工具组合只改这一个地方，
+    agent 主循环、评测台、CLI 都从这里拿。
+
+    Args:
+        store: 场景的日志仓库。每个场景一个独立的 store，
+            并发跑评测时不会互相污染。
+
+    Returns:
+        装好全部工具的注册表。
+    """
+    # 延迟导入，避免循环依赖：
+    #   tools/__init__ -> tools/query_logs -> tools/__init__（拿 Tool）
+    # 在函数内部导入时，本模块的 Tool / ToolRegistry 已经定义完了。
+    from fivewhys.tools.query_logs import build_query_logs_tool
+
+    registry = ToolRegistry()
+    registry.register(build_query_logs_tool(store))
+    return registry
+
+
+__all__ = ["Tool", "ToolRegistry", "build_registry"]
