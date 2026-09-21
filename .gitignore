@@ -18,9 +18,19 @@ htmlcov/
 coverage.xml
 
 # ---- 密钥（绝对不能提交）----
-.env
-.env.local
+#
+# ⚠️ 这里用通配而不是逐个列举（上线前审查 PRE-3）：
+# 原先只写了 `.env` 和 `.env.local`，于是 `.env.production`、
+# `.env.bak`、`.env.old` **都不被忽略** —— 一次 `git add -A` 就可能
+# 把带真实密钥的变体提交上去。密钥泄漏只需要成功一次。
+#
+# 唯一要保留的是模板文件本身。
+.env*
+!.env.example
 *.key
+*.pem
+secrets.*
+credentials.*
 
 # ---- 本地运行时数据 ----
 # 场景快照、trace、评测结果、生成的简历式报告都在这里，不进版本库
