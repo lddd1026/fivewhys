@@ -27,7 +27,9 @@
     data/scenarios/<scenario_id>/
     ├── scenario.json     # question + ground_truth + topology
     ├── logs.jsonl        # 日志
-    └── metrics.jsonl     # 指标
+    ├── metrics.jsonl     # 指标
+    ├── configs.jsonl     # 配置历史（根因证据所在）
+    └── deploys.jsonl     # 发布记录（用来排除干扰）
 
 ## 为什么 ground_truth 和 question 放在同一个文件里
 
@@ -57,8 +59,14 @@ METRICS_NAME = "metrics.jsonl"
 CONFIGS_NAME = "configs.jsonl"
 DEPLOYS_NAME = "deploys.jsonl"
 
+# 一个场景包由这几份文件组成。顺序就是落盘顺序，也是指纹的计算顺序。
+PACKAGE_FILES = (MANIFEST_NAME, LOGS_NAME, METRICS_NAME, CONFIGS_NAME, DEPLOYS_NAME)
+
 # 默认存放位置。已在 .gitignore 里（data/*）。
 DEFAULT_SCENARIO_ROOT = Path("data/scenarios")
+
+# 时间线默认起点。定死是为了可复现 —— 用 now() 的话每次生成的日志时间都不一样。
+DEFAULT_BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 
 # 清单格式版本。将来改结构时用它做兼容判断。
 MANIFEST_VERSION = 1
@@ -164,19 +172,34 @@ class Scenario:
 
     # ---- 持久化 ----
 
+    def to_files(self) -> dict[str, str]:
+        """场景包的全部文件内容（文件名 -> 文本）。
+
+        **只此一份实现**：:meth:`save` 写的就是它，
+        :func:`fivewhys.snapshot.digest_scenario` 算指纹算的也是它。
+
+        为什么重要：如果「落盘」和「算指纹」各写一遍，两边一旦漂移，
+        指纹就会与文件不符 —— 而指纹的全部意义就是证明文件没被动过。
+        """
+        return {
+            MANIFEST_NAME: self.manifest.model_dump_json(indent=2) + "\n",
+            LOGS_NAME: self.logs.to_jsonl(),
+            METRICS_NAME: self.metrics.to_jsonl(),
+            CONFIGS_NAME: self.configs.to_jsonl(),
+            DEPLOYS_NAME: self.deploys.to_jsonl(),
+        }
+
     def save(self, root: Path | None = None) -> Path:
-        """落盘到 ``<root>/<scenario_id>/``。返回目标目录。"""
+        """落盘到 ``<root>/<scenario_id>/``。返回目标目录。
+
+        换行符强制 LF（``newline="\\n"``）。不写这一句，Windows 上
+        同样的数据会落成 CRLF，指纹就换了 —— 场景包的指纹必须跨平台一致，
+        否则「在你机器上能复现」这句话没有意义。
+        """
         target = (root or DEFAULT_SCENARIO_ROOT) / self.scenario_id
         target.mkdir(parents=True, exist_ok=True)
-
-        (target / MANIFEST_NAME).write_text(
-            self.manifest.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        self.logs.dump_jsonl(target / LOGS_NAME)
-        self.metrics.dump_jsonl(target / METRICS_NAME)
-        self.configs.dump_jsonl(target / CONFIGS_NAME)
-        self.deploys.dump_jsonl(target / DEPLOYS_NAME)
+        for name, text in self.to_files().items():
+            (target / name).write_text(text, encoding="utf-8", newline="\n")
         return target
 
     @classmethod
@@ -259,7 +282,7 @@ def build_scenario(
     Returns:
         打包好的场景。
     """
-    base = base_time or datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
+    base = base_time or DEFAULT_BASE_TIME
     fault_at = base + timedelta(minutes=warmup_minutes)
     asked_about = target or "order-service"
 
@@ -322,12 +345,14 @@ def build_all_scenarios(
 
 __all__ = [
     "CONFIGS_NAME",
+    "DEFAULT_BASE_TIME",
     "DEFAULT_SCENARIO_ROOT",
     "DEPLOYS_NAME",
     "LOGS_NAME",
     "MANIFEST_NAME",
     "MANIFEST_VERSION",
     "METRICS_NAME",
+    "PACKAGE_FILES",
     "Scenario",
     "ScenarioManifest",
     "build_all_scenarios",

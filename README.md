@@ -66,9 +66,13 @@ fivewhys/
 │   ├── models.py        # 核心数据模型（地基）
 │   ├── config.py        # 配置收口
 │   ├── cli.py           # 命令行入口
+│   ├── scenario.py      # 场景包：question + data + ground_truth
+│   ├── snapshot.py      # 场景快照：评测集的字节级指纹
 │   ├── agent/           # agent 主循环与提示词
 │   ├── tools/           # 排障工具（当前按数据源切分；"按 SRE 路径切分更好"是待验证的假设）
 │   └── mock/            # 可注入故障的模拟系统
+├── eval/
+│   └── scenario_snapshot.json  # 评测集指纹（进版本库；场景包本身是生成物）
 ├── tests/
 ├── benchmarks/          # 评测执行器与结果（M6）
 └── docs/
@@ -100,7 +104,10 @@ TASKS.md          具体任务
 
 - [需求说明](docs/REQUIREMENTS.md) —— 先看这个，理解项目要解决什么问题
 - [路线图](docs/ROADMAP.md) —— 九个里程碑与验收标准
-- **当前进度：M1 进行中**（M0 已完成，FIV-1 已完成）
+- **当前进度：M0~M3 已完成，下一步 M4（工具补齐）**
+  - M3 交付：5 种故障 + 1 个健康对照场景，以及评测集指纹校验
+    （`fivewhys snapshot --check`）
+  - ⚠️ M1 的「真实模型跑 5 次至少对 3 次」验收仍未做 —— 需要 API Key
 
 ## 相关项目（以及本项目的区别）
 

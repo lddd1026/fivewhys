@@ -44,12 +44,18 @@ class LogStore:
 
     # ---- 持久化 ----
 
+    def to_jsonl(self) -> str:
+        """整个仓库序列化成 JSONL 文本。
+
+        **只此一份实现**：落盘（:meth:`dump_jsonl`）和场景快照指纹（FIV-12）
+        都从这里取内容。如果各写一份，迟早出现「落盘的和算指纹的不是同一份数据」。
+        """
+        return "".join(entry.model_dump_json() + "\n" for entry in self._entries)
+
     def dump_jsonl(self, path: Path) -> Path:
         """把日志落盘。评测复现靠它。"""
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as fh:
-            for entry in self._entries:
-                fh.write(entry.model_dump_json() + "\n")
+        path.write_text(self.to_jsonl(), encoding="utf-8", newline="\n")
         return path
 
     @classmethod

@@ -13,11 +13,23 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.padding import Padding
 from rich.table import Table
 
 from fivewhys import __version__
 from fivewhys.config import get_settings
-from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_db_pool_scenario
+from fivewhys.mock.injectors import available, catalogue
+from fivewhys.models import FaultCategory
+from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_scenario
+from fivewhys.snapshot import (
+    DEFAULT_SNAPSHOT_PATH,
+    Snapshot,
+    load_snapshot,
+    save_snapshot,
+    take_snapshot,
+    validate_all_scenarios,
+    verify_snapshot,
+)
 
 app = typer.Typer(
     name="fivewhys",
@@ -128,8 +140,59 @@ def doctor() -> None:
     console.print("[dim]        然后 python scripts/demo_m1.py 跑诊断。[/dim]")
 
 
+def _print_problems(title: str, problems: list[str]) -> None:
+    """打印问题列表。
+
+    用 ``Padding`` 缩进，而**不是**在每行前面加 ``- ``
+    —— 这些消息是中文，一整句就是一个「没有空格的长单词」。
+    Rich 的换行器遇到「当前行非空且这个超长词放不下」时，
+    会先把当前行（也就是光秃秃的 ``  - ``）输出，再把词硬折到下一行，
+    看起来像是打错了字。让第一行空着，它就会正常填满再折。
+    """
+    console.print(f"[red]{title}[/red]")
+    for problem in problems:
+        console.print(Padding(problem, (0, 0, 0, 4)))
+
+
+@app.command("faults")
+def faults_cmd() -> None:
+    """列出已注册的故障 —— `--category` 能填什么，看这里。"""
+    table = Table(title="已注册的故障", header_style="bold")
+    table.add_column("--category", style="cyan", no_wrap=True)
+    table.add_column("名称", no_wrap=True)
+    table.add_column("说明", style="dim")
+
+    for entry in catalogue():
+        table.add_row(entry["category"], entry["name"], entry["description"])
+
+    console.print(table)
+    console.print(f"[dim]共 {len(available())} 种。加新故障见 injectors/__init__.py 的说明。[/dim]")
+
+
+def _resolve_category(name: str) -> FaultCategory:
+    """把命令行传来的字符串解析成故障类别。
+
+    故意用 ``str`` 而不是直接用枚举当类型：枚举里有 9 个值，
+    但 M3 只注册了 6 种。Typer 会照枚举提示 9 个选项，
+    用户选了没实现的那个，报的错会很难懂。这里只认注册过的。
+    """
+    known = {category.value: category for category in available()}
+    if name not in known:
+        options = "、".join(known)
+        raise typer.BadParameter(
+            f"没有这个故障：「{name}」。可选：{options}（详情看 fivewhys faults）"
+        )
+    return known[name]
+
+
 @app.command("build-scenario")
 def build_scenario_cmd(
+    category: str = typer.Option(
+        FaultCategory.DB_POOL_EXHAUSTED.value,
+        "--category",
+        "-c",
+        help="故障类别。可选值看 fivewhys faults",
+    ),
     seed: int = typer.Option(0, "--seed", "-s", help="随机种子。同一个种子产出完全相同的场景"),
     out: Path = typer.Option(  # noqa: B008 —— typer 的惯用写法
         DEFAULT_SCENARIO_ROOT,
@@ -143,7 +206,7 @@ def build_scenario_cmd(
     落盘之后这个场景就是**一份文件**：谁跑、什么时候跑，结果都一样。
     评测比的就是「同一批场景下 agent 表现如何」，所以场景必须固化下来。
     """
-    scenario = build_db_pool_scenario(seed=seed)
+    scenario = build_scenario(_resolve_category(category), seed=seed)
     target = scenario.save(out)
 
     console.print(f"[green]场景已落盘[/green] {target}")
@@ -159,12 +222,129 @@ def build_scenario_cmd(
 
     problems = scenario.validate()
     if problems:
-        console.print("[red]场景校验未通过：[/red]")
-        for problem in problems:
-            console.print(f"  - {problem}")
+        _print_problems("场景校验未通过：", problems)
         raise typer.Exit(code=1)
 
     console.print("[green]校验通过[/green]：日志未泄漏答案，question 未泄漏判分词")
+
+
+@app.command("snapshot")
+def snapshot_cmd(
+    out: Path = typer.Option(  # noqa: B008
+        DEFAULT_SCENARIO_ROOT,
+        "--out",
+        "-o",
+        help="场景包输出目录（生成物，不进版本库）",
+    ),
+    manifest: Path = typer.Option(  # noqa: B008
+        DEFAULT_SNAPSHOT_PATH,
+        "--manifest",
+        "-m",
+        help="快照文件路径（进版本库的那份指纹）",
+    ),
+    seed: int = typer.Option(0, "--seed", "-s", help="随机种子"),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="只校验：用当前代码重造场景，和已有快照比对（不写任何文件）",
+    ),
+) -> None:
+    """给评测集拍快照，或校验它没被改过（需求 FR-4 / NFR-1）。
+
+    为什么要有这一步：M7 要比较「改进前 vs 改进后」的准确率，
+    前提是**两次跑的评测集一模一样**。注入器里随手改一行日志条数，
+    评测集就变了 —— 而这个模块会把这件事变成一次红灯，而不是一个悄悄偏移的曲线。
+
+    ``--check`` 不读磁盘上的场景包：它比对的是「代码 + 种子 → 字节」。
+    所以它能在 CI 里跑，也能在刚 clone 下来、``data/`` 还是空的时候跑。
+    """
+    if check:
+        _check_snapshot(manifest)
+        return
+
+    problems = validate_all_scenarios(seed=seed)
+    if problems:
+        _print_problems("有场景不可用，先修掉再拍快照：", problems)
+        raise typer.Exit(code=1)
+
+    snapshot, stale = take_snapshot(out, seed=seed)
+    target = save_snapshot(snapshot, manifest)
+
+    console.print(f"[bold]{snapshot.summary()}[/bold]")
+    console.print(_snapshot_table(snapshot))
+
+    for directory in stale:
+        console.print(f"[yellow]清掉了陈旧的场景包[/yellow] {directory.name}")
+    console.print(f"[green]场景包[/green] {out}")
+    console.print(f"[green]快照已写入[/green] {target}")
+
+    # 刚拍完立刻自校验一次 —— 立刻暴露「构造过程本身不确定」，
+    # 否则要等到别人机器上校验失败才发现。
+    drift = verify_snapshot(snapshot)
+    if drift:
+        _print_problems("刚拍完就校验不过 —— 场景构造过程不可复现：", drift)
+        raise typer.Exit(code=1)
+
+    console.print("[green]自校验通过[/green]：同样的代码和种子重造了一遍，字节完全一致")
+
+
+def _snapshot_table(snapshot: Snapshot) -> Table:
+    """快照清单表格。
+
+    ⚠️ 场景 id 很长（``order-service-dependency-5xx-20260101140200``，42 字符）。
+    如果给它 ``no_wrap``，在 80 列宽的终端里 Rich 会把**别的**列压成零宽度 ——
+    表现是「表头莫名其妙少了一列」，这个坑 FIV-12 踩过一次。
+    正确做法：让 id 列做那个可伸缩的列，超宽就省略号，其余列 ``no_wrap``。
+    """
+    table = Table(header_style="bold")
+    table.add_column("场景", style="cyan", max_width=38, overflow="ellipsis")
+    table.add_column("故障类别", no_wrap=True)
+    table.add_column("指纹", no_wrap=True)
+    for entry in snapshot.scenarios:
+        table.add_row(
+            entry.scenario_id,
+            entry.fault_category.value,
+            entry.digest[:12],
+        )
+    return table
+
+
+def _check_snapshot(manifest: Path) -> None:
+    """校验模式：打印逐个场景的比对结果，有问题就退出码 1。"""
+    try:
+        snapshot = load_snapshot(manifest)
+    except FileNotFoundError as exc:
+        # 缺文件是很常见的第一步失误（还没拍过快照）。
+        # 直接抛出去会甩一段 traceback 给用户 —— 需求 G4 要的是「5 分钟跑通」。
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[bold]{snapshot.summary()}[/bold]")
+
+    problems = verify_snapshot(snapshot)
+
+    table = Table(header_style="bold")
+    table.add_column("场景", style="cyan", max_width=38, overflow="ellipsis")
+    table.add_column("指纹", no_wrap=True)
+    table.add_column("结果", no_wrap=True)
+    for entry in snapshot.scenarios:
+        broken = any(entry.scenario_id in problem for problem in problems)
+        table.add_row(
+            entry.scenario_id,
+            entry.digest[:12],
+            "[red]变了[/red]" if broken else "[green]一致[/green]",
+        )
+    console.print(table)
+
+    if problems:
+        _print_problems("快照校验未通过：", problems)
+        console.print(
+            "\n[dim]如果改动是有意的（比如确实加了新故障），重拍快照即可："
+            "[bold]fivewhys snapshot[/bold][/dim]"
+        )
+        raise typer.Exit(code=1)
+
+    console.print("[green]快照校验通过[/green]：代码 + 种子重造出来的字节与快照完全一致")
 
 
 if __name__ == "__main__":
