@@ -223,7 +223,7 @@
 | --- | --- | --- |
 | P2-1 | **文档第一条命令曾直接失败**：`setup.ps1` 默认走清华镜像，镜像对构建依赖 `hatchling` 返回 403，报错是一大段 pip 内部输出 | ✅ 已修（`7e3e762`）：失败且非官方源时**自动换源重试一次**并打印在做什么。实测 167 秒成功 |
 | P2-2 | `setup.ps1` 的验证块用 `litellm.__version__`（不存在）→ **安装成功后**甩一段 `AttributeError` traceback | ✅ 已修（`59e4cb9`）：改用 `importlib.metadata`，整块包 try |
-| P2-3 | `pyproject.toml` 的 Homepage/Issues 仍是 `YOUR_GITHUB` | ⬜ **需要你的 GitHub 用户名**（发布前必填，见 §6） |
+| P2-3 | `pyproject.toml` 的 Homepage/Issues 是 `YOUR_GITHUB` | ✅ 已填 `lddd1026/fivewhys` |
 | P2-4 | 没有 lockfile，`pip install` 会拉同主版本内更新的依赖 | ⬜ 已知；已用「实测版本组合 + 主版本上限」缓解。完全复现需 `litellm==1.101.0` |
 | P2-5 | pytest 有一条上游 warning（pydantic × litellm 的 `ReadOnly` TypedDict） | ⬜ 上游问题，无害；**故意不静默**（静默上游告警会连真问题一起藏起来） |
 | P2-6 | `docs/DEV.md` 里写死了开发机的绝对路径（`D:\deepseekharness\.tmp`、anaconda 路径） | ⬜ 阅读体验问题，不影响运行 |
@@ -263,7 +263,7 @@
 - [x] 全新 clone + 全新 venv 逐条跑通 README 快速开始（含无 key 路径）
 - [x] 无任何密钥进入版本库（**全历史**扫描 0 命中）
 - [x] 所有失败模式有界、有明确报错、不崩栈（挂死/垃圾/500/429/连不上/坏 key/超预算）
-- [ ] **填 `pyproject.toml` 的 Homepage / Issues 为真实仓库地址**（需要你提供）
+- [x] 填 `pyproject.toml` 的 Homepage / Issues 为 `https://github.com/lddd1026/fivewhys`（README 的 clone 地址同步）
 - [ ] **轮换这次对话里出现过的那把 API Key**（它已离开你的机器）
 - [ ] 建远端仓库并确认 `.env` 未被推送（`git push` 后跑一次
       `git log --all --name-only | Select-String '\.env$'`）
