@@ -49,6 +49,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -239,6 +240,11 @@ def take_snapshot(
     target_root = root or DEFAULT_SCENARIO_ROOT
     base = base_time or DEFAULT_BASE_TIME
 
+    # ⚠️ 安全检查必须在**写任何东西之前** —— 否则拒绝清理的时候，
+    # 6 个场景包已经写进那个不安全的目录里了（上线前测试发现的顺序问题）。
+    if clean_stale:
+        _assert_safe_to_clean(target_root)
+
     scenarios = build_all_scenarios(seed=seed, base_time=base)
     directories = [scenario.save(target_root) for scenario in scenarios]
 
@@ -250,26 +256,88 @@ def take_snapshot(
     return Snapshot(seed=seed, base_time=base, scenarios=digests), stale
 
 
-def _clean_stale(root: Path, keep: set[str]) -> list[Path]:
-    """删掉 root 下不属于本次快照的场景包目录。
+class UnsafeOutputRootError(ValueError):
+    """输出目录不该被清理 —— 拒绝删任何东西。
 
-    只删「看起来就是场景包」的目录（含 ``scenario.json``）。
-    目录里如果放着别的东西，宁可留着也不动 —— 清理脚本误删东西是最糟的失败方式。
+    清理是**整个项目里唯一会删东西的地方**，所以它的默认姿态是「失败即不动」，
+    而不是「尽力而为」。用户真要在奇怪的地方生成场景，用 ``clean_stale=False``。
+    """
+
+
+def _assert_safe_to_clean(root: Path) -> None:
+    """拒绝在明显不该清理的目录下动手。
+
+    上线前测试发现的三个风险，对应下面三条检查：
+
+    1. ``--out .`` 指到源码根 → 会遍历整个仓库去找「陈旧场景包」
+    2. ``--out /`` 或 ``--out D:\\`` 指到盘根 → 同上，而且影响面是整个盘
+    3. 家目录 → 同上
+
+    代价是「多一次判断」，收益是「误删这件事基本不可能发生」。
+    """
+    resolved = root.resolve()
+    if resolved.parent == resolved:
+        raise UnsafeOutputRootError(f"拒绝清理盘根目录：{resolved}（用 --keep-stale 跳过清理）")
+    if (resolved / ".git").exists() or (resolved / "pyproject.toml").exists():
+        raise UnsafeOutputRootError(
+            f"拒绝清理源码目录：{resolved} —— 这里不是场景包输出目录（用 --keep-stale 跳过清理）"
+        )
+    if resolved == Path.home():
+        raise UnsafeOutputRootError(f"拒绝清理家目录：{resolved}（用 --keep-stale 跳过清理）")
+
+
+def _clean_stale(root: Path, keep: set[str]) -> list[Path]:
+    """删掉 root 下不属于本次快照的**场景包**目录。
+
+    ## 三条纪律（都是上线前测试补的）
+
+    1. **只删我们认得的场景包**：``scenario.json`` 必须能解析成
+       :class:`ScenarioManifest`，**而且目录名要等于它自己的 ``scenario_id``**。
+       光看「有没有 scenario.json」不够 —— 别的工具也用这个名字，
+       而清理脚本误删别人的东西是最糟的失败方式。
+    2. **不跟随符号链接**：链接指向的可能是目录树外面的东西。
+    3. **整目录一起删**（``shutil.rmtree``）：原先是一个个 ``unlink()`` 再
+       ``rmdir``，只要里面有一个子目录就会抛 PermissionError，
+       留下一个**删了一半**的目录 —— 实测确认过。
     """
     if not root.exists():
         return []
 
     removed: list[Path] = []
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name in keep:
+        if child.name in keep or not child.is_dir() or _is_link(child):
             continue
-        if not (child / MANIFEST_NAME).exists():
+        if not _is_our_scenario_package(child):
             continue
-        for leftover in child.iterdir():
-            leftover.unlink()
-        child.rmdir()
+        shutil.rmtree(child)
         removed.append(child)
     return removed
+
+
+def _is_link(path: Path) -> bool:
+    """目录是不是「链接」——符号链接**和** junction 都算。
+
+    ⚠️ Windows 上两者都要防：``is_symlink()`` 对 **junction 返回 False**，
+    而 junction 恰恰是**不需要管理员权限**就能创建的那一种
+    （``mklink /J`` / ``New-Item -ItemType Junction``）。
+    只防符号链接等于在 Windows 上没防。
+    """
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction()) if callable(is_junction) else False
+
+
+def _is_our_scenario_package(path: Path) -> bool:
+    """这个目录是不是我们自己生成的场景包？"""
+    manifest_path = path / MANIFEST_NAME
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = ScenarioManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return False
+    return manifest.scenario_id == path.name
 
 
 def validate_all_scenarios(*, seed: int = 0, base_time: datetime | None = None) -> list[str]:
@@ -396,6 +464,7 @@ __all__ = [
     "SNAPSHOT_VERSION",
     "ScenarioDigest",
     "Snapshot",
+    "UnsafeOutputRootError",
     "build_snapshot",
     "combine_digests",
     "digest_scenario",

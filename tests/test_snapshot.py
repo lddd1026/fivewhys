@@ -10,6 +10,7 @@ FR-15（场景包可独立加载）。
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,13 +19,14 @@ import pytest
 
 from fivewhys.mock import LogStore, MockService
 from fivewhys.mock.injectors import available
-from fivewhys.models import FaultCategory, LogLevel
+from fivewhys.models import FaultCategory, GroundTruth, LogLevel
 from fivewhys.scenario import (
     CONFIGS_NAME,
     LOGS_NAME,
     MANIFEST_NAME,
     METRICS_NAME,
     Scenario,
+    ScenarioManifest,
     build_all_scenarios,
     build_scenario,
 )
@@ -32,6 +34,7 @@ from fivewhys.snapshot import (
     DEFAULT_SNAPSHOT_PATH,
     ScenarioDigest,
     Snapshot,
+    UnsafeOutputRootError,
     build_snapshot,
     combine_digests,
     digest_scenario,
@@ -225,10 +228,12 @@ def test_take_snapshot_cleans_stale_packages(tmp_path: Path) -> None:
 
     否则 M6 遍历目录时会把它算进评测集 —— 「20 个场景」悄悄变成 21 个，
     而没有任何地方会报错。
+
+    ⚠️ 这里必须造一个**真**场景包（manifest 合法且 scenario_id 与目录名一致）——
+    PRE-2 之后，随手写个 ``{}`` 的目录不再算我们的包，也就不会被删。
+    那条收紧是有意的：清理只该删自己认得的东西。
     """
-    stale_dir = tmp_path / "order-service-old-fault-20200101000000"
-    stale_dir.mkdir()
-    (stale_dir / MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    stale_dir = _write_package(tmp_path, "order-service-old-fault-20200101000000")
 
     snapshot, stale = take_snapshot(tmp_path, seed=0, base_time=T0)
 
@@ -257,6 +262,154 @@ def test_take_snapshot_can_keep_stale_packages(tmp_path: Path) -> None:
 
     assert stale == []
     assert stale_dir.exists()
+
+
+# --------------------------------------------------------------------------
+# ⭐ 清理是唯一会删东西的地方 —— 上线前加固（PRE-2）
+#
+# 三条纪律：只删我们认得的场景包 / 不跟随符号链接 / 整目录一起删。
+# 下面每个测试都对应一条实测过的失效。
+# --------------------------------------------------------------------------
+
+
+def _write_package(root: Path, name: str, *, scenario_id: str | None = None) -> Path:
+    """手搓一个最小场景包目录（只写清理逻辑需要的那份文件）。"""
+    package = root / name
+    package.mkdir(parents=True, exist_ok=True)
+    (package / MANIFEST_NAME).write_text(
+        ScenarioManifest(
+            scenario_id=scenario_id or name,
+            question="q",
+            ground_truth=GroundTruth(
+                scenario_id=scenario_id or name,
+                fault_category=FaultCategory.NO_FAULT,
+                root_cause_service="order-service",
+                root_cause="无故障",
+                injected_at=T0,
+                symptoms=[],
+                match_keywords=[],
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    return package
+
+
+def test_cleaning_handles_a_nested_directory(tmp_path: Path) -> None:
+    """⭐ 陈旧场景包里有子目录时，必须整目录删干净，不能「删一半就崩」。
+
+    原实现是一个个 ``unlink()`` 再 ``rmdir()``：碰到子目录会抛
+    PermissionError（Windows），**留下一半被删的目录** —— 实测确认过。
+    """
+    package = _write_package(tmp_path, "order-service-ancient-20200101000000")
+    (package / "nested").mkdir()
+    (package / "nested" / "keep.txt").write_text("x", encoding="utf-8")
+
+    _, stale = take_snapshot(tmp_path, seed=0, base_time=T0)
+
+    assert package in stale
+    assert not package.exists(), "目录还在 —— 说明只删了一半"
+
+
+def test_cleaning_skips_directories_that_are_not_our_packages(tmp_path: Path) -> None:
+    """别人的 ``scenario.json`` 不许删。
+
+    只看「有没有 scenario.json」是不够的 —— 目录名和里面的 ``scenario_id``
+    对不上，就说明这不是我们生成的场景包。
+    """
+    other = _write_package(tmp_path, "someone-elses-thing", scenario_id="totally-different")
+    broken = tmp_path / "broken-manifest"
+    broken.mkdir()
+    (broken / MANIFEST_NAME).write_text("不是 JSON", encoding="utf-8")
+
+    take_snapshot(tmp_path, seed=0, base_time=T0)
+
+    assert other.exists(), "删掉了别人的目录"
+    assert broken.exists(), "删掉了 manifest 解析失败的目录"
+
+
+def test_cleaning_does_not_follow_symlinks(tmp_path: Path) -> None:
+    """符号链接一律跳过 —— 它指向的可能是目录树外面的东西。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("别删我", encoding="utf-8")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    link = root / "linked-package"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("这个环境不允许创建符号链接（Windows 需要开发者模式）")
+
+    take_snapshot(root, seed=0, base_time=T0)
+
+    assert (outside / "precious.txt").exists(), "顺着符号链接把外面的东西删了"
+
+
+def test_cleaning_does_not_follow_junctions(tmp_path: Path) -> None:
+    """Windows 上 junction 也要防 —— 而且它**不需要管理员权限**。
+
+    ``Path.is_symlink()`` 对 junction 返回 **False**，
+    所以只防符号链接等于在 Windows 上没防。
+    """
+    if not hasattr(Path, "is_junction"):
+        pytest.skip("这个 Python 版本没有 Path.is_junction")
+
+    outside = _write_package(tmp_path, "outside-package")
+    (outside / "precious.txt").write_text("别删我", encoding="utf-8")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    link = root / outside.name
+    created = subprocess.run(  # noqa: S603 —— 参数是我们自己拼的
+        ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"这个环境建不了 junction：{created.stderr or created.stdout}")
+
+    take_snapshot(root, seed=0, base_time=T0)
+
+    assert (outside / "precious.txt").exists(), "顺着 junction 把外面的东西删了"
+
+
+def test_refuses_to_clean_a_source_tree(tmp_path: Path) -> None:
+    """``--out .`` 指到源码根时必须**拒绝**，而且一个文件都不许写。
+
+    顺序很重要：安全检查要跑在**写场景包之前**，
+    否则拒绝的时候场景包已经写进那个不该动的目录了。
+    """
+    (tmp_path / "pyproject.toml").write_text("[project]", encoding="utf-8")
+    package = _write_package(tmp_path, "order-service-ancient-20200101000000")
+
+    with pytest.raises(UnsafeOutputRootError, match="源码目录"):
+        take_snapshot(tmp_path, seed=0, base_time=T0)
+
+    assert package.exists(), "拒绝之后还是删了东西 —— 检查顺序错了"
+    assert not list(tmp_path.glob("order-service-healthy-*")), "拒绝之前不该写任何场景包"
+
+
+def test_refuses_a_drive_root() -> None:
+    """盘根目录同理。这里只测判定函数 —— 真去删盘根是不可能测的。"""
+    from fivewhys.snapshot import _assert_safe_to_clean
+
+    with pytest.raises(UnsafeOutputRootError, match="盘根"):
+        _assert_safe_to_clean(Path(Path.cwd().anchor))
+
+
+def test_keep_stale_opts_out_of_the_safety_check(tmp_path: Path) -> None:
+    """用户明确说「别清理」时，仍然可以在任何地方生成场景（只是不删东西）。"""
+    (tmp_path / "pyproject.toml").write_text("[project]", encoding="utf-8")
+    package = _write_package(tmp_path, "order-service-ancient-20200101000000")
+
+    snapshot, stale = take_snapshot(tmp_path, seed=0, base_time=T0, clean_stale=False)
+
+    assert snapshot.scenarios, "应该照常生成场景"
+    assert stale == []
+    assert package.exists()
 
 
 # --------------------------------------------------------------------------
