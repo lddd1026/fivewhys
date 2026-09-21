@@ -270,6 +270,7 @@ async def diagnose(
         temperature=settings.temperature,
         api_base=settings.api_base,
         timeout_s=settings.llm_timeout_s,
+        max_output_tokens=settings.max_output_tokens,
     )
 
     run = AgentRun(scenario_id=scenario_id, model=client.model)

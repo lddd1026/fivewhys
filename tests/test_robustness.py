@@ -49,7 +49,12 @@ class _HostileHandler(BaseHTTPRequestHandler):
             time.sleep(60)  # 收了请求，永不回应
             return
 
-        if self.mode == "garbage":
+        if self.mode == "huge":
+            # 比闸门（10 万字符）大得多，但没大到让测试变慢
+            self._send(200, self._chat_payload("A" * 400_000))
+        elif self.mode == "ok":
+            self._send(200, self._chat_payload("正常长度的回复"))
+        elif self.mode == "garbage":
             self._send(200, b"<html>502 Bad Gateway</html>")
         elif self.mode == "http500":
             self._send(500, json.dumps({"error": {"message": "boom"}}).encode())
@@ -57,6 +62,25 @@ class _HostileHandler(BaseHTTPRequestHandler):
             self._send(429, json.dumps({"error": {"message": "rate limit"}}).encode())
         elif self.mode == "no_choices":
             self._send(200, json.dumps({"id": "x", "choices": []}).encode())
+
+    @staticmethod
+    def _chat_payload(content: str) -> bytes:
+        return json.dumps(
+            {
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "deepseek-chat",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+        ).encode()
 
     def _send(self, status: int, payload: bytes) -> None:
         self.send_response(status)
@@ -156,6 +180,84 @@ def test_timeout_is_configurable_by_env(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("FIVEWHYS_LLM_TIMEOUT_S", "7.5")
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     assert settings.llm_timeout_s == 7.5
+
+
+# --------------------------------------------------------------------------
+# ⭐ PRE-10：输出侧的两道闸门（max_tokens + 响应大小）
+# --------------------------------------------------------------------------
+
+
+def test_max_tokens_is_sent_by_default() -> None:
+    """必须发 max_tokens —— 这是我们唯一能主动设的成本上限。
+
+    实测：不发它时，一个 8MB 的回复让**单次调用**记账 $0.84，
+    是单次硬上限（$0.10）的 8 倍，而成本闸门是在调用之后才检查的。
+    """
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.max_output_tokens > 0
+    # 实测一次诊断的输出（含完整 9 字段结论）约 600~900 token，留一倍余量
+    assert settings.max_output_tokens >= 1000
+
+
+def test_max_tokens_is_passed_through_to_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    client = LiteLLMClient(model="m", max_output_tokens=1234)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(client.complete([{"role": "user", "content": "hi"}], []))
+
+    assert captured.get("max_tokens") == 1234
+
+
+async def test_oversized_response_is_rejected(hostile_server) -> None:
+    """⭐ 一次回复大得不正常时，宁可报错也不要带进上下文。
+
+    为什么不能截断了事：这个回复会被加进对话历史，下一次请求**整个**再发回去。
+    一份 8MB 的回复会让后续每次调用的输入都多 8MB —— 成本是平方级增长。
+    """
+    from fivewhys.agent.llm import MAX_RESPONSE_CHARS_ALLOWED, OversizedResponseError
+
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat",
+        api_base=hostile_server("huge"),
+        timeout_s=30,
+    )
+
+    with pytest.raises(OversizedResponseError) as excinfo:
+        await asyncio.wait_for(client.complete([{"role": "user", "content": "hi"}], []), timeout=60)
+
+    assert "字符" in str(excinfo.value)
+    assert f"{MAX_RESPONSE_CHARS_ALLOWED:,}" in str(excinfo.value)
+
+
+def test_normal_sized_response_is_accepted(hostile_server) -> None:
+    """别把闸门设得太紧 —— 正常的回复必须放行。"""
+    client = LiteLLMClient(
+        model="deepseek/deepseek-chat",
+        api_base=hostile_server("ok"),
+        timeout_s=10,
+    )
+    reply = asyncio.run(client.complete([{"role": "user", "content": "hi"}], []))
+    assert reply.content
+
+
+def test_oversized_response_becomes_a_bounded_error_in_the_loop() -> None:
+    """超大回复在主循环里变成一次有界 error，而不是崩栈。"""
+    from fivewhys.agent.llm import MAX_RESPONSE_CHARS_ALLOWED, OversizedResponseError
+
+    run = _run_failing_diagnose(
+        OversizedResponseError(f"模型这一次回复了 {MAX_RESPONSE_CHARS_ALLOWED + 1:,} 字符")
+    )
+    assert run.stop_reason == "error"
+    assert "字符" in (run.error or "")
 
 
 # --------------------------------------------------------------------------
