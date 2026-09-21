@@ -57,6 +57,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from fivewhys.agent.evidence import check_evidence
 from fivewhys.agent.llm import (
     LiteLLMClient,
     LLMClient,
@@ -368,6 +369,22 @@ async def diagnose(
                 for call in response.tool_calls:
                     if call.name == SUBMIT_TOOL_NAME:
                         diagnosis, error = _parse_diagnosis(call.arguments)
+                        if diagnosis is not None and settings.verify_evidence:
+                            # ---- 证据来源校验（FR-8）----
+                            # 结构合法不代表内容诚实：模型可以编一条「看起来很像」
+                            # 的证据来支持一个它猜出来的根因。这里查的是
+                            # 「这条证据声称来自的那次调用，真的发生过吗」。
+                            problems = check_evidence(
+                                diagnosis,
+                                run.tool_calls,
+                                known_tools=registry.names(),
+                            )
+                            if problems:
+                                error = "结论里的证据无法核对：\n" + "\n".join(
+                                    f"  - {problem}" for problem in problems
+                                )
+                                diagnosis = None
+
                         if diagnosis is not None:
                             run.diagnosis = diagnosis
                             stop_reason = "submitted"

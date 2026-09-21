@@ -48,6 +48,10 @@ def _settings(**overrides: object) -> Settings:
         "max_steps": 5,
         "max_cost_usd": 1.0,
         "trace_enabled": False,  # 由测试自己传 writer，避免写到仓库里
+        # ⚠️ 关掉证据校验：这个文件测的是别的机制（token 预算 / 轨迹），
+        # 脚本里的结论没有引用任何真实工具调用 —— 开了校验会被拒（那是 FIV-17 的正确行为）。
+        # 证据校验本身在 tests/test_evidence.py 里用**默认值**测。
+        "verify_evidence": False,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[call-arg]
