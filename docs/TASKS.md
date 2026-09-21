@@ -13,7 +13,9 @@
 
 ## 进行中
 
-（空）
+- [~] **FIV-2** 实现 `query_logs` 工具（含 NFR-11 上下文预算 ≤2000 token） · `P0` · 约 2h
+  - 分支：`feat/FIV-2-query-logs`
+  - 涉及：`src/fivewhys/tools/query_logs.py`、`tests/test_query_logs.py`
 
 ---
 
@@ -22,9 +24,6 @@
 ### M1 · 端到端最细竖切（当前里程碑）
 
 目标：一个假服务、一种故障、一个工具，agent 能诊断出来。
-
-- [ ] **FIV-2** 实现 `query_logs` 工具（含 NFR-11 上下文预算 ≤2000 token） · `P0` · 约 2h
-  - 涉及：`src/fivewhys/tools/query_logs.py`
 
 - [ ] **FIV-3** 把 `query_logs` 注册进 registry 并写单测 · `P0` · 约 1h
   - 涉及：`src/fivewhys/tools/__init__.py`、`tests/`
