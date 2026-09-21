@@ -25,6 +25,14 @@ from fivewhys.mock.changes import (
     DeployRecord,
     DeployStore,
 )
+from fivewhys.mock.injectors import (
+    INJECTORS,
+    InjectionContext,
+    InjectorSpec,
+    available,
+    catalogue,
+    inject,
+)
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricBucket, MetricStore, RequestSample
 from fivewhys.mock.service import MockService
@@ -38,11 +46,14 @@ from fivewhys.mock.topology import (
 __all__ = [
     "DEFAULT_CONFIGS",
     "DEFAULT_TOPOLOGY",
+    "INJECTORS",
     "ConfigChange",
     "ConfigSnapshot",
     "ConfigStore",
     "DeployRecord",
     "DeployStore",
+    "InjectionContext",
+    "InjectorSpec",
     "LogStore",
     "MetricBucket",
     "MetricStore",
@@ -50,4 +61,7 @@ __all__ = [
     "MockSystem",
     "RequestSample",
     "ServiceSpec",
+    "available",
+    "catalogue",
+    "inject",
 ]
