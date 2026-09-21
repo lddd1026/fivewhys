@@ -301,6 +301,7 @@ async def main() -> int:
     passed = 0
     total_cost = 0.0
     attempted = 0
+    traces: list[str] = []
 
     for index in range(args.runs):
         # ---- 总预算闸门（上线前审查 PRE-7）----
@@ -319,6 +320,8 @@ async def main() -> int:
         ok = points >= PASS_THRESHOLD
         passed += int(ok)
         total_cost += run.total_cost_usd
+        if run.trace_path:
+            traces.append(run.trace_path)
 
         table.add_row(
             str(index + 1),
@@ -331,6 +334,12 @@ async def main() -> int:
         )
 
     console.print(table)
+
+    # 轨迹路径要打出来：落盘了但没人知道在哪，等于没落盘
+    console.print()
+    if traces:
+        console.print(f"[dim]轨迹：{traces[-1]}[/dim]")
+        console.print("[dim]       用 `fivewhys trace latest` 看这次诊断的每一步[/dim]")
     console.print()
 
     if attempted == 0:

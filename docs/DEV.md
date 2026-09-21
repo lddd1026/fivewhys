@@ -155,6 +155,24 @@ python scripts/review_tool_descriptions.py --budget   # 只看总量：描述 21
 **读一遍输出**，你就能判断：线索够不够、哪一步查了等于没查、
 答案会不会不小心从日志里泄漏出去。
 
+## 看一次诊断的轨迹
+
+需求 FR-9 要求每次诊断都落盘完整轨迹（`runs/<run_id>/trace.jsonl`，已在 .gitignore 里）。
+跑完 `demo_m1.py` 会直接打印轨迹路径，也可以：
+
+```powershell
+fivewhys trace latest                 # 最近一次
+fivewhys trace order-service-db-pool  # 按前缀找
+fivewhys trace latest --full          # 不截断，看完整内容
+```
+
+它把「模型调了什么」和「工具返回了什么」配成对显示 —— 复盘的第一件事就是对齐这两样。
+**排查失败时先看这个**：能直接看出模型在哪一步走偏、读到什么才走偏的。
+
+轨迹是 JSONL，一行一个事件（`start` / `request` / `response` / `tool_result` / `finish`）。
+为什么是 JSONL 而不是一个大 JSON：**边跑边写** —— 跑到第 7 步崩了，
+前 7 步仍然在盘上，而那正是最需要轨迹的时候。
+
 ## 场景快照：证明评测集没被改过
 
 ```powershell

@@ -62,6 +62,7 @@ from fivewhys.agent.prompts import build_system_prompt
 from fivewhys.config import Settings, get_settings
 from fivewhys.models import AgentRun, Diagnosis, ToolCallRecord
 from fivewhys.tools import ToolRegistry
+from fivewhys.trace import TraceWriter, new_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,7 @@ async def diagnose(
     registry: ToolRegistry,
     llm: LLMClient | None = None,
     settings: Settings | None = None,
+    trace: TraceWriter | None = None,
 ) -> AgentRun:
     """对一个问题做多步根因诊断。
 
@@ -260,6 +262,8 @@ async def diagnose(
         registry: 可用工具
         llm: LLM 客户端。**默认走 litellm；测试时注入假客户端即可脱离网络**
         settings: 运行配置，默认读环境变量
+        trace: 轨迹写入器。默认按 settings 自动建一个 —— 需求 FR-9 说的是
+            每次诊断**必须**落盘完整轨迹；关掉只有一个理由：测试不想往仓库写数据
 
     Returns:
         完整的 ``AgentRun``：轨迹 + 结构化结论 + 成本/耗时/停止原因。
@@ -273,7 +277,16 @@ async def diagnose(
         max_output_tokens=settings.max_output_tokens,
     )
 
-    run = AgentRun(scenario_id=scenario_id, model=client.model)
+    writer = trace
+    if writer is None and settings.trace_enabled:
+        writer = TraceWriter(new_run_id(scenario_id), root=settings.trace_root)
+
+    run = AgentRun(
+        scenario_id=scenario_id,
+        model=client.model,
+        run_id=writer.run_id if writer else "",
+        trace_path=str(writer.path) if writer else None,
+    )
     tools = [*registry.specs(), submit_tool_spec()]
     messages: list[Message] = [
         {
@@ -286,15 +299,44 @@ async def diagnose(
         {"role": "user", "content": question},
     ]
 
+    if writer is not None:
+        writer.start(
+            scenario_id=scenario_id,
+            question=question,
+            model=client.model,
+            tool_names=registry.names(),
+            settings=settings.model_dump(mode="json"),
+        )
+
     stop_reason = "max_steps"
 
     try:
         for step in range(1, settings.max_steps + 1):
             run.steps = step
 
+            if writer is not None:
+                writer.request(step=step, messages=list(messages))
+
+            call_started = time.perf_counter()
             response = await client.complete(messages, tools)
+            call_latency = _elapsed_ms(call_started)
+
             run.total_cost_usd += response.cost_usd
             run.total_tokens += response.total_tokens
+
+            if writer is not None:
+                writer.response(
+                    step=step,
+                    content=response.content,
+                    tool_calls=[
+                        {"id": call.id, "name": call.name, "arguments": call.arguments}
+                        for call in response.tool_calls
+                    ],
+                    prompt_tokens=response.prompt_tokens,
+                    completion_tokens=response.completion_tokens,
+                    cost_usd=response.cost_usd,
+                    latency_ms=call_latency,
+                )
 
             # 模型只在说话，没调工具 —— 不当作结束，推它一把
             if not response.tool_calls:
@@ -310,6 +352,16 @@ async def diagnose(
                             run.diagnosis = diagnosis
                             stop_reason = "submitted"
                             messages.append(_tool_message(call.id, "结论已接收，调查结束。"))
+                            if writer is not None:
+                                # 提交也要记结果：否则轨迹里「提交被拒」和
+                                # 「提交成功」长得一模一样 —— 而它们是两种完全不同的失败模式
+                                writer.tool_result(
+                                    step=step,
+                                    tool=SUBMIT_TOOL_NAME,
+                                    args={},
+                                    ok=True,
+                                    result="结论已接收",
+                                )
                             break
                         # 解析失败：把校验错误喂回去，让它自己纠正
                         run.tool_calls.append(
@@ -321,6 +373,15 @@ async def diagnose(
                                 error=error,
                             )
                         )
+                        if writer is not None:
+                            writer.tool_result(
+                                step=step,
+                                tool=SUBMIT_TOOL_NAME,
+                                args={},
+                                ok=False,
+                                result="",
+                                error=error,
+                            )
                         messages.append(
                             _tool_message(call.id, f"结论格式不合法，请修正后重新提交：{error}")
                         )
@@ -331,6 +392,16 @@ async def diagnose(
                     messages.append(
                         _tool_message(call.id, record.result_summary or record.error or "")
                     )
+                    if writer is not None:
+                        writer.tool_result(
+                            step=step,
+                            tool=record.tool,
+                            args=record.args,
+                            ok=record.ok,
+                            result=record.result_summary,
+                            error=record.error,
+                            latency_ms=record.latency_ms,
+                        )
 
             if run.diagnosis is not None:
                 break
@@ -353,10 +424,15 @@ async def diagnose(
         run.stop_reason = "error"
         run.error = f"{type(exc).__name__}: {exc}"
         run.finished_at = datetime.now(UTC)
+        # 异常路径也要收尾：否则复盘时分不清「跑完了」和「进程被杀」
+        if writer is not None:
+            writer.finish(run)
         return run
 
     run.stop_reason = stop_reason
     run.finished_at = datetime.now(UTC)
+    if writer is not None:
+        writer.finish(run)
     return run
 
 
