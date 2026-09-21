@@ -269,6 +269,7 @@ async def diagnose(
         model=settings.llm_model,
         temperature=settings.temperature,
         api_base=settings.api_base,
+        timeout_s=settings.llm_timeout_s,
     )
 
     run = AgentRun(scenario_id=scenario_id, model=client.model)
@@ -338,7 +339,16 @@ async def diagnose(
                 break
 
     except Exception as exc:  # noqa: BLE001 —— 崩溃要记录成结果，而不是抛给调用方
-        logger.exception("诊断过程中出现未预期的异常")
+        # ⚠️ 日志分两级，因为**调用方看到的东西不一样**：
+        #
+        # 默认只打一行（WARNING，无堆栈）—— 用户看到的是
+        # 「调用模型失败：AuthenticationError: ... 401」，而不是 60 行 litellm 内部堆栈。
+        # 上线前实测：一个坏 key 会在结果表格之前甩出 60 行 traceback，
+        # 而表格里只写着「未提交结论（error）」—— 既吓人又没说清原因。
+        #
+        # 完整堆栈仍然保留，但要开 DEBUG 才看（`-v` / FIVEWHYS 日志级别）。
+        logger.warning("诊断中断：%s: %s", type(exc).__name__, exc)
+        logger.debug("诊断中断的完整堆栈", exc_info=True)
         run.stop_reason = "error"
         run.error = f"{type(exc).__name__}: {exc}"
         run.finished_at = datetime.now(UTC)

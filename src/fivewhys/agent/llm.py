@@ -96,14 +96,23 @@ class LiteLLMClient:
         model: str,
         temperature: float = 0.0,
         api_base: str | None = None,
+        timeout_s: float | None = None,
     ) -> None:
         # 离线价格表的开关在**模块级**设置 —— 见文件顶部。放在这里会太晚。
         import litellm
+
+        # litellm 在出错时会用 print 打一段 "Give Feedback / Get Help" 横幅
+        # （不走 logging，所以压 logger 级别没用）。实测：坏 key 时它会夹在
+        # 我们的错误行和结果表格之间，看起来像是我们的程序坏了。
+        litellm.suppress_debug_info = True
 
         self._litellm = litellm
         self.model = model
         self.temperature = temperature
         self.api_base = api_base
+        # 为什么必须显式给：litellm 默认 600 秒/次，× max_steps(20) = 最多 3 小时。
+        # provider 挂死时命令行会一直僵着 —— 这是**有界性**问题，不是性能问题。
+        self.timeout_s = timeout_s
 
     async def complete(
         self,
@@ -118,6 +127,8 @@ class LiteLLMClient:
         # 只在设置了才传：传 None 会让部分 provider 报错
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        if self.timeout_s is not None:
+            kwargs["timeout"] = self.timeout_s
         # 没有工具时不要传 tools=[]，部分 provider 会报错
         if tools:
             kwargs["tools"] = list(tools)

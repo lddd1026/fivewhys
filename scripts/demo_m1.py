@@ -42,6 +42,7 @@ from rich.table import Table  # noqa: E402
 
 from fivewhys.agent import diagnose  # noqa: E402
 from fivewhys.config import get_settings  # noqa: E402
+from fivewhys.logs import configure_logging  # noqa: E402
 from fivewhys.models import AgentRun, FaultCategory  # noqa: E402
 from fivewhys.scenario import Scenario  # noqa: E402
 from fivewhys.scenario import build_scenario as build_full_scenario  # noqa: E402
@@ -178,6 +179,32 @@ def show_trace(run: AgentRun) -> None:
 # --------------------------------------------------------------------------
 
 
+def explain_failure(run: AgentRun) -> str:
+    """把「为什么没出结论」说成人话。
+
+    ⚠️ 这段是上线前测试补的：坏 key 时以前只在表格备注里写「未提交结论（error）」，
+    用户既不知道是 401 还是网络断了，也不知道该动哪里。
+    现在按错误类型给一句**可执行的**提示。
+    """
+    detail = (run.error or "").strip().splitlines()[0] if run.error else ""
+    lowered = detail.lower()
+
+    if "401" in lowered or "authentication" in lowered or "api key" in lowered:
+        hint = "API Key 不对或已失效 —— 检查 .env 里的 DEEPSEEK_API_KEY"
+    elif "429" in lowered or "rate limit" in lowered:
+        hint = "被限流了 —— 等一会儿再跑，或把 --runs 调小"
+    elif "timeout" in lowered or "timed out" in lowered:
+        hint = "请求超时 —— 检查网络，或调大 FIVEWHYS_TIMEOUT_S"
+    elif "connect" in lowered or "network" in lowered or "dns" in lowered:
+        hint = "连不上 provider —— 检查网络/代理，或确认 FIVEWHYS_API_BASE 是对的"
+    elif "402" in lowered or "insufficient" in lowered or "balance" in lowered:
+        hint = "账户余额不足 —— 去 provider 后台充值"
+    else:
+        hint = "加 -v 跑一次看完整报错"
+
+    return f"{run.stop_reason}：{detail[:120]} —— {hint}" if detail else f"{run.stop_reason}"
+
+
 async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
     scenario = make_scenario(seed)
     run = await diagnose(
@@ -195,7 +222,7 @@ async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
         show_trace(run)
 
     if run.diagnosis is None:
-        return run, 0.0, [f"未提交结论（{run.stop_reason}）"]
+        return run, 0.0, [explain_failure(run)]
 
     result = score_diagnosis(run.diagnosis, scenario.ground_truth)
     return run, result.total, result.notes
@@ -206,7 +233,11 @@ async def main() -> int:
     parser.add_argument("--runs", type=int, default=5, help="跑几次（默认 5）")
     parser.add_argument("--trace", action="store_true", help="打印工具调用轨迹")
     parser.add_argument("--offline", action="store_true", help="不调 LLM，只展示场景")
+    parser.add_argument("-v", "--verbose", action="store_true", help="打印调试日志（含堆栈）")
     args = parser.parse_args()
+
+    # 默认安静：一行错误信息，不甩 litellm 的堆栈和横幅（上线前测试发现的）
+    configure_logging(verbose=args.verbose)
 
     settings = get_settings()
 
