@@ -183,6 +183,9 @@ def inject_db_pool_exhausted(
             "请求延迟超过 500ms 的 SLO",
         ],
         match_keywords=["connection", "pool", "连接池", "耗尽", "exhaust"],
+        # ⚠️ 只放真正的答案词。绝不能放 "connection" ——
+        # 它是日志里的关键线索（connection wait time 飙升），必须出现。
+        answer_keywords=["pool", "连接池", "耗尽", "exhaust", "连接数上限"],
     )
 
 
