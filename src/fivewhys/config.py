@@ -97,11 +97,13 @@ class Settings(BaseSettings):
 
     # 单次请求的上下文上限（**发出去之前**按字符估算，3 字符 ≈ 1 token）。
     #
-    # 为什么要在发之前拦：deepseek-chat 的上下文窗口是 64k，
-    # 超了 provider 直接报错 —— 与其等它报错，不如提前停，
-    # 并且明确告诉人「是上下文涨满了」，而不是甩一个 provider 异常。
-    # 换模型（窗口更大/更小）时改这个值。
-    max_context_tokens: int = 60_000
+    # 默认 ``None`` = **按模型的窗口自动算**（见 fivewhys.providers）：
+    # 实测窗口差得极远 —— deepseek-chat 131,072、gpt-4o-mini 128,000、
+    # gemini-2.0-flash **1,048,576**。写死一个数会出两种错：
+    # 对窗口大的模型提前 17 倍停止，对窗口小的模型等 provider 报错（那时钱已花）。
+    #
+    # 设了具体数字就按它来（调参 / 复现实验时用）。
+    max_context_tokens: int | None = None
 
     # 温度。0 是为了让诊断尽量可复现
     temperature: float = 0.0

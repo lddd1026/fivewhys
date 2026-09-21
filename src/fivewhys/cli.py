@@ -21,6 +21,7 @@ from fivewhys.config import get_settings
 from fivewhys.logs import configure_logging
 from fivewhys.mock.injectors import available, catalogue
 from fivewhys.models import FaultCategory
+from fivewhys.providers import ModelInfo, api_key_env_for, describe_model
 from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_scenario
 from fivewhys.snapshot import (
     DEFAULT_SNAPSHOT_PATH,
@@ -67,16 +68,6 @@ def main_callback(
     configure_logging(verbose=verbose)
 
 
-# provider 前缀 -> 需要的环境变量名
-PROVIDER_API_KEYS: dict[str, str] = {
-    "deepseek": "DEEPSEEK_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-
 REQUIRED_DEPS: tuple[str, ...] = (
     "litellm",
     "pydantic",
@@ -93,10 +84,21 @@ def version() -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="检查另一个模型而不改配置，例如 --model gemini/gemini-2.0-flash",
+    ),
+) -> None:
     """体检：检查环境是否就绪。
 
     M0 的验收标准就是这条命令全绿。
+
+    ``--model`` 是 FIV-16 加的：换模型前的第一个问题是「这个模型认不认识、
+    窗口多大、key 该放哪」，而**这些都能在花钱之前回答**。
+    等到第一次调用才发现名字写错，那就已经付过学费了。
     """
     table = Table(title="fivewhys doctor", show_lines=False, header_style="bold")
     table.add_column("检查项", style="cyan", no_wrap=True)
@@ -123,19 +125,50 @@ def doctor() -> None:
     )
     hard_failures += 0 if not missing else 1
 
-    # --- 3. 配置 ---
+    # --- 3. 模型（FIV-16：把本地表能回答的都答了）---
     settings = get_settings()
-    table.add_row("模型", "[green]OK[/green]", settings.llm_model)
+    target = model or settings.llm_model
+    info = describe_model(target)
+
+    if info.known:
+        window = f"{info.max_input_tokens:,}" if info.max_input_tokens else "未知"
+        # 闸门是按窗口算的，所以直接把**实际会用的数**打出来 ——
+        # 让人看到「1,048,576 的窗口 → 闸门 838,860」，而不是自己去乘 0.8
+        gate = f"{info.context_limit(override=settings.max_context_tokens):,}"
+        price = _price_note(info)
+        table.add_row(
+            "模型",
+            "[green]OK[/green]",
+            f"{target}（窗口 {window} → 上下文闸门 {gate}{price}）",
+        )
+    else:
+        table.add_row(
+            "模型",
+            "[yellow]WARN[/yellow]",
+            f"{target} 不在 litellm 本地表里 —— 名字可能写错了，"
+            f"确认无误则上下文闸门按保守值 {info.context_limit():,} 走",
+        )
+
+    if model and model != settings.llm_model:
+        table.add_row("配置模型", "[dim]—[/dim]", f"{settings.llm_model}（本次用 --model 覆盖）")
+
     table.add_row("5 Whys 深度", "[green]OK[/green]", str(settings.max_why_depth))
 
-    # --- 4. API Key（软检查，M5 之前用不到）---
-    provider = settings.llm_model.split("/", 1)[0]
-    key_name = PROVIDER_API_KEYS.get(provider)
+    # --- 4. API Key ---
+    # 查表收口在 fivewhys.providers —— 原先 CLI 和 demo 各有一份，
+    # 加一个 provider 要改两处，而漏改的那处只会静默失效。
+    #
+    # ⚠️ 这里读到的值可能来自三个地方，而且都算数：真实环境变量、
+    #    ``.env``（config.load_dotenv）、以及 **litellm 自己 import 时**
+    #    又读了一遍 ``.env``（见 docs/DEV.md）。三者的优先级一致
+    #    （已存在的变量优先），所以结论可靠；但**测试里不能靠 delenv 模拟
+    #    「没配」** —— 空串才是「没配」（``.env.example`` 出厂长这样）。
+    key_name = api_key_env_for(target)
     if key_name is None:
         table.add_row(
             "API Key",
             "[yellow]WARN[/yellow]",
-            f"不认识 provider「{provider}」，请确认 key 已按 litellm 约定设置",
+            f"不认识 provider「{info.provider}」，请确认 key 已按 litellm 约定设置",
         )
     elif os.environ.get(key_name):
         table.add_row("API Key", "[green]OK[/green]", f"{key_name} 已设置")
@@ -143,7 +176,7 @@ def doctor() -> None:
         table.add_row(
             "API Key",
             "[yellow]WARN[/yellow]",
-            f"未设置 {key_name} —— M5 联网调用前必须补上",
+            f"未设置 {key_name} —— 联网调用前必须补上",
         )
 
     # --- 5. .env ---
@@ -166,6 +199,21 @@ def doctor() -> None:
     console.print("\n[green]环境就绪。[/green]")
     console.print("[dim]下一步：fivewhys build-scenario 造一个场景，")
     console.print("[dim]        然后 python scripts/demo_m1.py 跑诊断。[/dim]")
+
+
+def _price_note(info: ModelInfo) -> str:
+    """价格注脚。查不到价格时**什么都不写**，而不是写「未知」——
+
+    「未知价格」四个字在体检表里制造焦虑，但项目并不依赖价格表
+    （成本优先取 provider 上报的数字，见 ``llm._estimate_cost``）。
+    没有就是没有。
+    """
+    if info.input_price_per_million is None or info.output_price_per_million is None:
+        return ""
+    return (
+        f"，参考价 ${info.input_price_per_million:.2f}"
+        f"/${info.output_price_per_million:.2f} 每百万 token"
+    )
 
 
 def _print_problems(title: str, problems: list[str]) -> None:
@@ -211,7 +259,13 @@ def trace_cmd(
     info = summarize(path)
     console.print(f"[bold]{info['run_id']}[/bold]")
     console.print(f"  问题      : {info['question']}")
-    console.print(f"  模型      : {info['model']}")
+    # 请求名和实际服务名不一致时**两个都打**（约束 C-7）：
+    # 只说一个都会让读者以为那就是真实情况。
+    served = info.get("served_model")
+    model_note = info["model"]
+    if served and served != info["model"]:
+        model_note = f"{info['model']}  [dim](provider 实际服务：{served})[/dim]"
+    console.print(f"  模型      : {model_note}")
     console.print(
         f"  结果      : {info['stop_reason']}"
         + (f"  [red]{info['error']}[/red]" if info["error"] else "")

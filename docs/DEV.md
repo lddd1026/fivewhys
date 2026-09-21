@@ -53,6 +53,9 @@ pwsh -File scripts/setup.ps1
 # 体检
 fivewhys doctor
 
+# 体检另一个模型（不花钱、不联网，见「换模型」一节）
+fivewhys doctor --model gemini/gemini-2.0-flash
+
 # 跑测试
 pytest
 
@@ -127,6 +130,26 @@ python scripts/demo_m1.py --runs 3 --trace
   `tests/test_e2e_demo.py::test_env_var_prefix_is_fivewhys` 守着这一点。
 - 假服务用 HTTP/1.1 + `Content-Length`，注意别漏 `Content-Length` 否则客户端会一直等。
 
+### litellm 自己也会读 `.env`（FIV-16 踩到）
+
+`import litellm` 时它执行 `load_dotenv(override=False)`（`.venv/.../litellm/__init__.py`）。
+后果有两个，第二个才是麻烦的：
+
+1. 我们的 `config.load_dotenv(override=False)` 因此不是唯一入口 —— 但行为一致，
+   都遵守「已在环境里的变量优先」。
+2. **从环境里删掉的变量会被它重新灌回来**（只要 `.env` 里还有那一行），
+   而且是**在你删完之后**、因为某次 import 才发生的。
+
+第 2 点踩到的现场：`tests/test_cli.py::test_doctor_passes_without_api_key`
+原先用 `monkeypatch.delenv("DEEPSEEK_API_KEY")` 模拟「没配 key」，一直绿。
+FIV-16 让 `doctor` 先调 `describe_model`（→ 第一次 `import litellm`），
+于是变量在检查之前被 `.env` 重新填上，测试变成红的 —— 而**产品行为是对的**：
+`.env` 里有 key，那 key 就是配了的。
+
+所以：**测试里要模拟「变量不存在」，用 `setenv(name, "")`，不要用 `delenv()`。**
+空串是稳定的（`load_dotenv` 见到 key 已存在会跳过），而且它本来就是
+`.env.example` 出厂的样子 —— 空串 = 没配。
+
 ## 看看工具给 agent 看了什么
 
 工具返回值会直接进模型的上下文，所以「agent 到底看到了什么」是最该亲眼确认的事。
@@ -182,13 +205,14 @@ fivewhys trace latest          # 被拒的话会看到一行 FAIL，内容是具
 | 环境变量 | 默认 | 拦什么 |
 | --- | --- | --- |
 | `FIVEWHYS_MAX_TOTAL_TOKENS` | 200000 | 单次诊断**累计**用量（provider 上报的硬数字） |
-| `FIVEWHYS_MAX_CONTEXT_TOKENS` | 60000 | 单次请求的上下文（**发出去之前**按字符估算，3 字符 ≈ 1 token） |
+| `FIVEWHYS_MAX_CONTEXT_TOKENS` | **空 = 按模型窗口自动算**（窗口 × 80%） | 单次请求的上下文（**发出去之前**按字符估算，3 字符 ≈ 1 token） |
 
 触发了会记 `stop_reason=max_tokens`，并在轨迹里留一句可读的 `stop_note`：
 
 ```
 累计 205,123 token，超过单次诊断上限 200,000（第 12 步后停止）
-第 8 步的请求预估 62,400 token，超过上下文上限 60,000 —— 提前停止（历史被工具返回撑满了）
+第 8 步的请求预估 88,000 token，超过上下文上限 104,857（deepseek/deepseek-chat
+可用窗口的 80%）—— 提前停止（历史被工具返回撑满了）
 ```
 
 **为什么在成本上限之外还要这个**：成本要查价格表（FIV-D3 那个 bug 就是查不到 →
@@ -197,6 +221,61 @@ fivewhys trace latest          # 被拒的话会看到一行 FAIL，内容是具
 
 实测一次 5 步诊断：峰值上下文 10.6k token、累计 48.7k —— 默认值有 4~6 倍余量，
 正常调查不会被误伤。多轮运行还有一个总预算：`demo_m1.py --max-total-tokens`。
+
+## 换模型（FR-6 / NFR-13 / 约束 C-7）
+
+换 provider 只改一个配置项，**不用改代码**：
+
+```powershell
+# 永久换：改 .env 里的 FIVEWHYS_LLM_MODEL
+# 只换这一次：
+python scripts/demo_m1.py --model gpt-4o-mini
+fivewhys doctor --model gemini/gemini-2.0-flash
+```
+
+**换之前先 `doctor --model`。** 它不花钱、不联网，直接回答四件事：
+名字认不认识、窗口多大、**上下文闸门会是多少**、key 该放哪个环境变量。
+
+```powershell
+fivewhys doctor --model gemini/gemini-2.0-flash
+# 模型  OK  gemini/gemini-2.0-flash（窗口 1,048,576 → 上下文闸门 838,860，
+#         参考价 $0.10/$0.40 每百万 token）
+# API Key  WARN  未设置 GEMINI_API_KEY
+```
+
+### ⚠️ 上下文闸门是**按模型窗口**算的，不是固定值
+
+这一点值得单独说，因为它是一个**已经踩过的坑**：
+
+| 模型 | 输入窗口 | 原先的固定闸门 60k 相当于 |
+| ---- | -------- | ------------------------- |
+| `deepseek/deepseek-chat` | 131,072 | 45.8% |
+| `gpt-4o-mini` | 128,000 | 46.9% |
+| `gemini/gemini-2.0-flash` | 1,048,576 | **5.7%** |
+
+固定 60k 会让 gemini 在**只用了 5.7% 窗口**时停下，还附一句不成立的解释
+（「历史被工具返回撑满了」）。所以默认值改成了「按窗口 × 80% 自动算」，
+`FIVEWHYS_MAX_CONTEXT_TOKENS` 只在需要复现某次实验时才设。
+
+查不到窗口（名字写错 / 新模型）时回落到 **32,000** —— 宁可早停：
+早停有 `stop_note` 可查，猜大了是 provider 报错**且钱已经花了**。
+详见 REQUIREMENTS §12.6。
+
+### provider 实际服务的模型名，未必是你请求的那个
+
+实测：请求 `deepseek/deepseek-chat`，DeepSeek 端返回的 model id 是 `deepseek-flash`。
+约束 C-7 要求「所有对外展示的数字必须标注所用模型」——
+只标请求名等于在报告里写了一个**没跑过的模型**。
+
+所以 `AgentRun` 同时记两个，轨迹的 `finish` 事件里也落了盘：
+
+```powershell
+fivewhys trace latest
+#   模型      : deepseek/deepseek-chat  (provider 实际服务：deepseek-flash)
+```
+
+`demo_m1.py` 跑完会打印 `实际模型 : deepseek-flash（请求的是 deepseek/deepseek-chat）`。
+**写进 README 用后者。**
 
 ## 看一次诊断的轨迹
 

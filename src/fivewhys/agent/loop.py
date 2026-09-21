@@ -80,6 +80,7 @@ from fivewhys.agent.llm import (
 from fivewhys.agent.prompts import build_system_prompt
 from fivewhys.config import Settings, get_settings
 from fivewhys.models import AgentRun, Diagnosis, ToolCallRecord
+from fivewhys.providers import describe_model
 from fivewhys.tools import ToolRegistry
 from fivewhys.trace import TraceWriter, new_run_id
 
@@ -307,6 +308,15 @@ async def diagnose(
         trace_path=str(writer.path) if writer else None,
     )
     tools = [*registry.specs(), submit_tool_spec()]
+
+    # ---- 上下文闸门：按**这个模型自己的窗口**算（FIV-16）----
+    #
+    # 为什么不能写死一个数：实测窗口差 8 倍以上 ——
+    # deepseek-chat 131,072 / gpt-4o-mini 128,000 / gemini-2.0-flash 1,048,576。
+    # 写死 60k 换到 gemini 上会**提前 17 倍停止**，把本来能跑完的调查活活掐掉。
+    # 这里算一次、循环里复用（每步都查表没必要，而且模型中途不会换）。
+    context_limit = describe_model(client.model).context_limit(override=settings.max_context_tokens)
+
     messages: list[Message] = [
         {
             "role": "system",
@@ -337,11 +347,12 @@ async def diagnose(
             # 每步都把工具返回追加进历史，prompt 会自己长大。等到 provider 报
             # 「上下文超限」时，这一轮的钱已经花了 —— 提前停既省钱也能说清原因。
             estimated = estimate_request_tokens(messages, tools)
-            if estimated > settings.max_context_tokens:
+            if estimated > context_limit:
                 stop_reason = "max_tokens"
                 run.stop_note = (
                     f"第 {step} 步的请求预估 {estimated:,} token，超过上下文上限 "
-                    f"{settings.max_context_tokens:,} —— 提前停止（历史被工具返回撑满了）"
+                    f"{context_limit:,}（{client.model} 可用窗口的 80%）—— "
+                    "提前停止（历史被工具返回撑满了）"
                 )
                 logger.warning("诊断停止：%s", run.stop_note)
                 break
@@ -355,6 +366,20 @@ async def diagnose(
 
             run.total_cost_usd += response.cost_usd
             run.total_tokens += response.total_tokens
+
+            # ---- 记下 provider **实际服务**的模型名（约束 C-7）----
+            # 只在第一次记，并且只在**和请求名不一样**时提示一次。
+            # 为什么不每次都比：同一份事实只有一个来源 —— 重复的警告会把
+            # 真正的问题淹没在噪音里，而这种「别名 vs 实际 id」的差异
+            # 在一次运行里是恒定的。
+            if run.served_model is None and response.served_model:
+                run.served_model = response.served_model
+                if response.served_model != client.model:
+                    logger.info(
+                        "provider 实际服务的模型是 %s（请求的是 %s）",
+                        response.served_model,
+                        client.model,
+                    )
 
             if writer is not None:
                 writer.response(

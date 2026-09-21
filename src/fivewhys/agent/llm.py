@@ -62,6 +62,17 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
+    # provider **实际上服务**的那个模型名。
+    #
+    # 为什么它和 ``LiteLLMClient.model`` 是两个东西：前者是你请求的别名，
+    # 后者是对方回给你的 id。实测请求 ``deepseek/deepseek-chat``，
+    # DeepSeek 回的是 ``deepseek-flash``。
+    #
+    # 约束 C-7 要求「所有对外展示的数字必须标注所用模型」——
+    # 只标请求名不够：同一份报告里「deepseek-chat」和实际跑的
+    # 「deepseek-flash」是两回事，读者有权知道真正跑的是什么。
+    # 这个字段就是那个「真正跑的」。（它也是 FIV-D3 成本算成 0 的成因。）
+    served_model: str | None = None
     raw: Any = field(default=None, repr=False, compare=False)
 
     @property
@@ -164,6 +175,7 @@ class LiteLLMClient:
             prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             cost_usd=_estimate_cost(self._litellm, response),
+            served_model=getattr(response, "model", None),
             raw=response,
         )
 

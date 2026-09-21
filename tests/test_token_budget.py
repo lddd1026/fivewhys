@@ -241,13 +241,24 @@ async def test_stop_note_is_written_to_the_trace(tmp_path: Path) -> None:
 
 
 def test_defaults_are_generous_enough_for_a_real_run() -> None:
-    """默认值不能误伤真实运行：实测一次 5 步诊断约 48k token、上下文约 20k。"""
+    """默认值不能误伤真实运行：实测一次 5 步诊断约 48k token、上下文约 20k。
+
+    FIV-16 之后 ``max_context_tokens`` 默认是 ``None`` = **按模型的窗口自动算**。
+    所以这里断言的是**最终生效的那个闸门**，而不是配置字段本身 ——
+    「默认值够不够大」这件事，只有算完之后才回答得了。
+    """
+    from fivewhys.providers import UNKNOWN_MODEL_CONTEXT_TOKENS, describe_model
+
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     assert settings.max_total_tokens >= 100_000
-    assert settings.max_context_tokens >= 32_000
+    assert settings.max_context_tokens is None, "默认按模型窗口自动算，不写死"
+
+    gate = describe_model(settings.llm_model).context_limit(override=settings.max_context_tokens)
+    assert gate >= UNKNOWN_MODEL_CONTEXT_TOKENS, f"闸门 {gate} 太小，会误伤正常诊断"
 
 
 def test_token_limits_are_configurable_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """设了具体数字就按它来 —— 这是复现实验时唯一能固定闸门的办法。"""
     monkeypatch.setenv("FIVEWHYS_MAX_TOTAL_TOKENS", "123456")
     monkeypatch.setenv("FIVEWHYS_MAX_CONTEXT_TOKENS", "45678")
 
@@ -255,3 +266,10 @@ def test_token_limits_are_configurable_by_env(monkeypatch: pytest.MonkeyPatch) -
 
     assert settings.max_total_tokens == 123_456
     assert settings.max_context_tokens == 45_678
+    # 显式配置优先于「按窗口自动算」
+    from fivewhys.providers import describe_model
+
+    assert (
+        describe_model(settings.llm_model).context_limit(override=settings.max_context_tokens)
+        == 45_678
+    )

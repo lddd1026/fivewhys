@@ -66,8 +66,19 @@ def test_doctor_passes_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
     需求 FR-14a：离线自检不需要 API Key。如果这里直接失败，
     陌生人 clone 下来第一步就卡住了。
+
+    ⚠️ 用 ``setenv("")`` 而不是 ``delenv()``（FIV-16 踩到）：
+
+    ``doctor`` 现在会调 ``describe_model`` → 第一次 ``import litellm``，
+    而 litellm 的 ``__init__`` 里有 ``load_dotenv(override=False)`` ——
+    它会把 ``.env`` 里的 ``DEEPSEEK_API_KEY`` **重新灌回** ``os.environ``。
+    于是「删掉变量」这个动作会被随后的 import 撤销，测试的结果取决于
+    litellm 有没有被别处先 import 过 —— 一个典型的顺序依赖。
+
+    设成空串则是稳定的：``load_dotenv(override=False)`` 见到 key 已存在就跳过，
+    而空串在我们的检查里就是「没配」——这正是 ``.env.example`` 出厂的样子。
     """
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0, result.stdout
@@ -112,6 +123,92 @@ def test_doctor_warns_when_env_file_missing(
 
     assert result.exit_code == 0
     assert "未找到" in result.stdout
+
+
+def test_doctor_can_check_another_model_without_touching_config() -> None:
+    """`doctor --model` 是 FIV-16 的核心用途：**花钱之前**问清这个模型能不能用。
+
+    不断言具体窗口数字（那会随 litellm 版本变），只断言四件事都被回答了：
+    名字认不认识、窗口多大、闸门多少、key 放哪。
+    """
+    result = runner.invoke(app, ["doctor", "--model", "gemini/gemini-2.0-flash"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "上下文闸门" in result.stdout
+    # 覆盖只作用于这一次：配置里的模型必须没变
+    assert "本次用 --model 覆盖" in result.stdout
+
+
+def test_doctor_flags_an_unknown_model_name() -> None:
+    """名字写错时要说「可能写错了」，而不是等第一次调用去发现。
+
+    以前这个场景还夹着两行 litellm 用 `print()` 甩出来的红色
+    "Provider List: ..."（不走 logging，压 logger 级别没用）——
+    正好盖在我们的警告上。见 tests/test_providers.py 的回归测试。
+    """
+    result = runner.invoke(app, ["doctor", "--model", "not/a-model"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "名字可能写错了" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# .env.example 必须真的能用（FIV-16 发现）
+#
+# 这个文件里写着 FIVEWHYS_MODEL=... —— 而 Settings 的字段是 llm_model，
+# 环境变量名是 **FIVEWHYS_LLM_MODEL**。多一个/少一个词都不会报错，
+# pydantic 只会静默忽略它（extra="ignore"），于是用户改了模型却毫无效果。
+#
+# 更讽刺的是：这个文件自己就写着「写成 FIVWHYS_ 不会报错，只会静默失效」。
+# 一个「关于静默失效的警告」本身静默失效了 —— 所以必须有机器来查。
+# --------------------------------------------------------------------------
+
+
+def test_env_example_only_uses_real_settings_keys() -> None:
+    """`.env.example` 里每个 FIVEWHYS_* 都必须是 Settings 真的认得的字段。"""
+    from pathlib import Path
+
+    from fivewhys.config import Settings
+
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    lines = example.read_text(encoding="utf-8").splitlines()
+
+    # 认得的变量名 = 前缀 + 字段名
+    known = {f"FIVEWHYS_{name.upper()}" for name in Settings.model_fields}
+
+    checked = 0
+    for number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            continue  # 注释、空行、说明文字
+        name = stripped.split("=", 1)[0].strip()
+        if not name.startswith("FIVEWHYS_"):
+            continue  # provider 的 key（DEEPSEEK_API_KEY 等）不归 Settings 管
+        assert name in known, (
+            f".env.example 第 {number} 行写了 {name}，但 Settings 里没有这个字段 —— "
+            f"它会被静默忽略。认得的名字：{sorted(known)}"
+        )
+        checked += 1
+
+    assert checked >= 5, f"只查到 {checked} 个变量，解析 .env.example 的方式可能不对"
+
+
+def test_env_example_model_key_is_the_one_settings_reads() -> None:
+    """单独钉住模型那一行 —— 它是最容易被写错、也最贵的一个。
+
+    写错的后果不是报错，是**换了模型却还在用旧的**，而所有指标都跟着错。
+    """
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    active = {
+        line.split("=", 1)[0].strip()
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.strip().startswith("#")
+    }
+
+    assert "FIVEWHYS_LLM_MODEL" in active
+    assert "FIVEWHYS_MODEL" not in active, "少了 LLM 三个字，这行会被静默忽略"
 
 
 # --------------------------------------------------------------------------
