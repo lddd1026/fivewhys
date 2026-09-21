@@ -50,6 +50,10 @@ def fit_lines(
     两个上限都要有：``limit`` 防的是「模型一次要一万条」，``budget`` 防的是
     「每条都很长，一百条就把上下文撑爆」。只防其中一个都会漏。
 
+    ⚠️ 它只管**明细行**。整段返回的预算由 :func:`render_block` 负责 ——
+    上线前审查踩过这个坑：只在明细行上卡预算、表头不计入，
+    最宽的参数下实测 6108 字符，超了 6000 的线。
+
     Returns:
         ``(保留的行, 是否被截断)``
     """
@@ -70,16 +74,50 @@ def render_block(
     summary: str,
     *,
     note: str | None = None,
+    truncated_note: str = TRUNCATED_NOTE,
     meta: str | None = None,
-    lines: Iterable[str] = (),
+    rows: Iterable[str] = (),
+    limit: int | None = None,
+    budget: int = MAX_RESPONSE_CHARS,
 ) -> str:
-    """拼成统一格式。详见模块 docstring 里的示例。"""
+    """拼成一次工具调用的**完整返回**，并保证它不超过上下文预算。
+
+    统一的格式（详见模块 docstring）::
+
+        共命中 12 条，显示 12 条               <- summary
+        这本身就是线索：……                     <- note（总是显示，例如空结果）
+        （受输出预算限制，结果已截断）           <- truncated_note（只在被截断时）
+        服务=order-service  时间=14:02~14:07   <- meta
+        14:02:01 ERROR deadline exceeded       <- rows
+        …
+
+    **预算管的是整段返回** —— NFR-11 说的是「单次工具调用返回 ≤ 2000 token」，
+    所以表头和截断提示都要先扣掉，剩下的才是明细行的额度。
+
+    （上线前审查实测：只在明细行上卡预算、表头不计入，最宽的参数下会到
+    6108 字符，超了 6000 的线。当时的测试里还带了个 +200 的容差，
+    正好把这个越界掩盖住。）
+    """
+    header = [summary]
+    header.extend(part for part in (note, meta) if part)
+    header_len = sum(len(part) + 1 for part in header)
+    # 截断提示自己也要占额度 —— 先预留，免得到时候又超出去
+    reserved = len(truncated_note) + 1
+
+    kept, truncated = fit_lines(
+        rows,
+        limit=limit,
+        budget=max(0, budget - header_len - reserved),
+    )
+
     parts = [summary]
     if note:
         parts.append(note)
+    if truncated:
+        parts.append(truncated_note)
     if meta:
         parts.append(meta)
-    parts.extend(lines)
+    parts.extend(kept)
     return "\n".join(parts)
 
 

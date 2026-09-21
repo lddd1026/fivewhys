@@ -142,7 +142,7 @@ def build_get_config_tool(configs: ConfigStore, *, services: Sequence[str] = ())
                 lines.append(f"  note: {effective.note}")
 
         summary = f"查到 {len(changes)} 次配置变化，{len(snapshots)} 份配置快照"
-        return render_block(summary, meta=meta, lines=lines)
+        return render_block(summary, meta=meta, rows=lines)
 
     return Tool(
         name="get_config",
