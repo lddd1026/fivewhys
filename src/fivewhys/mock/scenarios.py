@@ -56,13 +56,26 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fivewhys.mock.logstore import LogStore
+from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
 from fivewhys.models import FaultCategory, GroundTruth, LogLevel
 
 # 故障持续时间
 _FAULT_DURATION = timedelta(minutes=5)
 
-# 故障期间背景噪声的间隔（秒）
+# 故障期间背景噪声的间隔（秒）。
+#
+# ⚠️ 它对应的吞吐（约 0.33 QPS）明显低于正常时期的 2 QPS —— **这是有意的**。
+#
+# 真实故障中吞吐通常会下降：请求排队超时、客户端放弃重试、负载均衡把节点摘掉。
+# 于是指标上会同时出现三个信号：
+#
+#   错误率上升   <- 指向「出问题了」
+#   P95 飙升     <- 指向「问题有多严重」
+#   QPS 下降     <- 指向「影响面有多大」
+#
+# **三个都不指向根因。** 这正是我们想要的：指标负责「发现异常」，
+# 查明原因还得靠日志和 trace。
 _NOISE_INTERVAL_S = 3
 
 
@@ -70,14 +83,21 @@ def inject_db_pool_exhausted(
     store: LogStore,
     service: MockService,
     at: datetime,
+    *,
+    metrics: MetricStore | None = None,
 ) -> GroundTruth:
     """注入「数据库连接池耗尽」故障。
 
     Args:
-        store: 日志仓库。当前实现通过 ``service.emit()`` 写入，所以这个参数
-            暂时用不到；M2/M3 会用到 —— 那时一个故障需要往多个服务写日志。
+        store: 日志仓库
         service: 被注入故障的服务
         at: 故障开始的时间点
+        metrics: 指标仓库。传了的话，故障会**同时**反映到指标上
+            （错误率上升、P95 延迟飙升）。不传则只写日志。
+
+            为什么要有这个参数：日志说「发生了什么」、指标说「影响有多大」，
+            两者必须说的是同一件事。如果故障只出现在日志里、指标却一片正常，
+            agent 会被带偏 —— 它会认为「监控没报警，问题不大」。
 
     Returns:
         这个场景的 ground truth，供评测判分使用。
@@ -91,6 +111,10 @@ def inject_db_pool_exhausted(
     # 为什么要这样：故障现象和背景噪声是交错生成的，只有排序才能保证
     # 写出去的时间顺序正确。
     events: list[tuple[datetime, LogLevel, str, str | None]] = []
+
+    # 失败请求的指标采样。与 ERROR 日志一一对应 —— 一条失败日志 = 一条 5xx 采样。
+    # 超时类失败的耗时约等于 deadline（配置值），所以用 3 秒附近的值。
+    failures: list[tuple[datetime, int]] = []
 
     # ---- 证据 1：触发点。严格早于故障开始 ----
     events.append(
@@ -116,6 +140,7 @@ def inject_db_pool_exhausted(
                 trace,
             )
         )
+        failures.append((cursor, rng.randint(2900, 3200)))
         cursor += timedelta(seconds=rng.randint(5, 25))
 
         # 证据 3：关键线索。只描述「等连接变慢了」，绝不说「池满了」。
@@ -147,6 +172,9 @@ def inject_db_pool_exhausted(
     # ---- 背景噪声：故障期间正常请求照常进来 ----
     # 没有这段，故障窗口里 100% 是 ERROR/WARN，agent 一眼就能锁定，
     # 不需要任何推理能力。
+    #
+    # 注意：这些正常请求**也进指标**。所以故障期间指标不是"错误率 100%"，
+    # 而是"错误率涨到某个百分比"—— 这才像真的。
     noise_cursor = at
     while noise_cursor < end:
         latency_ms = max(
@@ -161,12 +189,18 @@ def inject_db_pool_exhausted(
                 service.new_trace_id(),
             )
         )
+        if metrics is not None:
+            metrics.record_request(noise_cursor, service.name, latency_ms, status=200)
         noise_cursor += timedelta(seconds=_NOISE_INTERVAL_S)
 
     # ---- 排序后统一写入。sorted 是稳定的，同一时刻保持插入顺序 ----
     events.sort(key=lambda event: event[0])
     for ts, level, message, trace_id in events:
         service.emit(level, message, ts, trace_id=trace_id)
+
+    if metrics is not None:
+        for ts, latency_ms in failures:
+            metrics.record_request(ts, service.name, latency_ms, status=504)
 
     return GroundTruth(
         scenario_id=f"{service.name}-db-pool-{at:%Y%m%d%H%M%S}",
@@ -181,6 +215,8 @@ def inject_db_pool_exhausted(
             "order lookup 大量 context deadline exceeded",
             "connection wait time 从 ~0ms 飙升到 3000ms",
             "请求延迟超过 500ms 的 SLO",
+            "错误率从 0% 升到 10% 以上，P95 从 ~100ms 冲到 3000ms",
+            "QPS 从 ~1.7 降到 ~0.4（吞吐下降）",
         ],
         match_keywords=["connection", "pool", "连接池", "耗尽", "exhaust"],
         # ⚠️ 只放真正的答案词。绝不能放 "connection" ——
