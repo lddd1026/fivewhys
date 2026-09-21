@@ -79,3 +79,39 @@ pwsh -File scripts/setup.ps1 -IndexUrl https://pypi.org/simple
 
 脚本默认用 PATH 里的 `python`（当前是 `E:\ProgramData\anaconda3\python.exe`，3.13.9）。
 想固定解释器，先建好 venv 再跑脚本即可 —— 脚本检测到 `.venv` 存在就直接复用。
+
+## 端到端测试：本地假 LLM 服务
+
+`tests/mock_llm_server.py` 起一个本地的 OpenAI 兼容端点（用标准库，零依赖）。
+把 `FIVEWHYS_API_BASE` 指向它，就能在**不联网、不花钱**的前提下跑通整条链路：
+
+```
+demo_m1.py 子进程 -> get_settings -> LiteLLMClient -> litellm 发真实 HTTP
+  -> 假服务返回响应 -> 解析 -> 工具分发 -> query_logs 真的被调用
+  -> 提交结论 -> 判分 -> 输出表格与判定
+```
+
+**除「模型智力」以外全部是真的。** 比假 Python 对象（`ScriptedLLM`）更进一步：
+它能抓到 HTTP 层、JSON 序列化、litellm 适配层、进程边界、退出码的问题。
+
+`pytest tests/test_e2e_demo.py` 就是在跑这个。
+
+手动体验：
+
+```powershell
+$env:DEEPSEEK_API_KEY = 'sk-fake'
+$env:FIVEWHYS_API_BASE = 'http://127.0.0.1:PORT'   # 由 fake_llm_server 提供
+python scripts/demo_m1.py --runs 3 --trace
+```
+
+### 但它不能替代真实运行
+
+响应是脚本化的，不会推理。它证明的是「链路通」，不是「模型够聪明」。
+**M1 的验收标准（跑 5 次至少 3 次正确）仍然需要真实的 API Key。**
+
+### 踩过的坑
+
+- 环境变量前缀是 **`FIVEWHYS_`**（five + whys）。写成 `FIVWHYS_` 不会报错，
+  只会静默失效 —— 请求会打到官方接口上，然后收到莫名其妙的鉴权失败。
+  `tests/test_e2e_demo.py::test_env_var_prefix_is_fivewhys` 守着这一点。
+- 假服务用 HTTP/1.1 + `Content-Length`，注意别漏 `Content-Length` 否则客户端会一直等。

@@ -261,6 +261,7 @@ async def diagnose(
     client = llm or LiteLLMClient(
         model=settings.llm_model,
         temperature=settings.temperature,
+        api_base=settings.api_base,
     )
 
     run = AgentRun(scenario_id=scenario_id, model=client.model)

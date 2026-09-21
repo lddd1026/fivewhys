@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # litellm 的 "provider/model" 格式，例如 deepseek/deepseek-chat
     llm_model: str = "deepseek/deepseek-chat"
 
+    # 自定义 API 端点。留空则用 provider 的官方地址。
+    #
+    # 两个用途：
+    #   1. 指向自建的 OpenAI 兼容端点（vLLM / Ollama / 公司内网网关）
+    #   2. 端到端测试时指向本地假 LLM 服务 —— 不开网络、不花钱，
+    #      却能验证 HTTP 层、工具调用往返、判分、结论输出的整条链路
+    api_base: str | None = None
+
     # 5 Whys 的最大追问层数 —— agent 的主要停止条件
     max_why_depth: int = 5
 
