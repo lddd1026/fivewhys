@@ -13,10 +13,14 @@
 
 ## 进行中
 
-- [~] **FIV-5** 端到端手工验证 M1 · `P0` · 约 2h
-  - 分支：`feat/FIV-5-e2e-demo`
-  - 涉及：`scripts/demo_m1.py`（新建）
-  - 前置：`.env` 里需要 `DEEPSEEK_API_KEY`
+- [~] **FIV-5** 端到端验证 M1 · `P0` · 约 2h
+  - 涉及：`scripts/demo_m1.py`、`tests/mock_llm_server.py`、`tests/test_e2e_demo.py`
+  - ✅ 验证脚本已就绪（含 `--offline`、`--trace`、判分、判定输出）
+  - ✅ **假 LLM 服务的端到端测试已通过**（真实 HTTP + 真实 litellm + 真实子进程，
+    只把「模型智力」换成脚本）—— 跑到「通过 3/3」
+  - ⬜ **真实运行待做**：验收标准是「跑 5 次至少 3 次正确」，
+    这一步需要真实模型，`.env` 里要有 `DEEPSEEK_API_KEY`
+  - 阻塞原因：外部依赖（用户的 API Key），非代码问题
 
 ---
 
