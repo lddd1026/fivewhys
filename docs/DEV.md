@@ -128,7 +128,17 @@ python scripts/inspect_scenario.py -c no_fault        # 健康场景
 python scripts/inspect_scenario.py --full             # 不截断输出
 ```
 
-它按一次真实排障的顺序调用工具（指标 → 日志 → 配置 → 发布 → 拓扑），
+另一个脚本专门用来看**说明书**（也就是提示词里那部分）：
+
+```powershell
+python scripts/review_tool_descriptions.py            # 通读 5 条描述 + 全部参数描述
+python scripts/review_tool_descriptions.py --budget   # 只看总量：描述 2167 字 ≈ 722 token/次请求
+```
+
+超预算时它会以退出码 1 结束。**该做的是删废话，不是调高预算数字** ——
+说明书写在每一次请求的提示词里，30 步的诊断就发 30 遍，这笔钱直接落在成本红线（NFR-2）上。
+
+`inspect_scenario.py` 按一次真实排障的顺序调用工具（指标 → 日志 → 配置 → 发布 → 拓扑），
 最后自检两件事：日志里没有答案词、答案能在配置里查到。
 
 **读一遍输出**，你就能判断：线索够不够、哪一步查了等于没查、

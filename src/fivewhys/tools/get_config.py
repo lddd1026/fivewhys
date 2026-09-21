@@ -49,19 +49,19 @@ class GetConfigArgs(BaseModel):
     service: str = Field(description="服务名，例如 order-service")
     at: datetime | None = Field(
         default=None,
-        description="看这个时刻生效的配置。不传就看最新一份",
+        description="看这个时刻（ISO 8601）生效的配置。不传就看最新一份",
     )
     since: datetime | None = Field(
         default=None,
         description=(
-            "只列这个时刻之后的配置变化。"
+            "只列这个时刻（ISO 8601）之后的配置变化。"
             "典型用法：从 query_logs 拿到「错误从 14:30 开始」，"
             "就传 since=14:25 看之前几分钟改过什么"
         ),
     )
     include_values: bool = Field(
         default=True,
-        description="是否附带当前生效的完整配置（默认带上，方便对照）",
+        description="是否附带当前生效的完整配置（默认带上，方便和变化对照）",
     )
 
 
@@ -147,12 +147,16 @@ def build_get_config_tool(configs: ConfigStore, *, services: Sequence[str] = ())
     return Tool(
         name="get_config",
         description=(
-            "查询某个服务的配置历史：**有哪些配置项被改过、什么时候改的、改成了什么**，"
-            "以及某个时刻生效的完整配置。"
-            "配置变更是最常见的根因藏身处 —— 当指标和日志都指向某个时间点时，"
-            "用 since 查那个时间点**之前几分钟**的配置变化，往往能直接看到答案。"
-            "如果没有任何配置变化，这也是重要线索：说明根因不在配置上，"
-            "该去看发布记录或下游服务了。"
+            "查询某个服务的配置历史：哪些配置项被改过、什么时候改的、改成了什么，"
+            "以及某个时刻生效的完整配置。\n"
+            "**排障的第三步，也是最可能找到根因的一步**：配置变更是根因最常见的藏身处。"
+            "当指标和日志都指向某个时间点时，用 since 查那个时间点**之前几分钟**"
+            "的配置变化，往往能直接看到答案。\n"
+            "局限：它只覆盖你传进去的**那一个服务**。这个服务没有变化不等于没问题 —— "
+            "根因可能在它调用的下游（用 get_dependencies 找下游是谁），"
+            "或者是某次发布引起的（用 get_deploy_history）。\n"
+            '典型调用：get_config(service="order-service", '
+            'since="2026-01-01T13:57:00Z")'
         ),
         args_model=GetConfigArgs,
         func=_get,

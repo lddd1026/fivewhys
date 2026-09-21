@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -65,25 +66,42 @@ from fivewhys.tools._render import (
 __all__ = ["MAX_RESPONSE_CHARS", "QueryLogsArgs", "build_query_logs_tool"]
 
 
+# 允许的日志级别。用 Literal 而不是 str，是为了让**模型看到可选值**，
+# 并且**写错时报错而不是静默返回空**：
+#   levels=["warning"] 以前会被规整成 WARNING，和 WARN 对不上 → 过滤出 0 条
+#   → 工具回一句「这个服务没有异常」。一次拼写错误就变成了「服务是健康的」。
+LogLevelName = Literal["DEBUG", "INFO", "WARN", "ERROR"]
+
+# 默认只看 WARN/ERROR —— 别让 INFO 把上下文淹了。
+DEFAULT_LEVELS: list[LogLevelName] = ["WARN", "ERROR"]
+
+
 class QueryLogsArgs(BaseModel):
     """query_logs 的参数。字段 description 会直接给模型看，措辞很重要。"""
 
     service: str = Field(description="服务名，例如 order-service")
     start: datetime = Field(description="时间窗口起点（ISO 8601）")
     end: datetime = Field(description="时间窗口终点（ISO 8601）")
-    levels: list[str] = Field(
-        default_factory=lambda: ["WARN", "ERROR"],
-        description="要看的日志级别。默认只看 WARN/ERROR，避免被 INFO 淹没",
+    levels: list[LogLevelName] = Field(
+        default_factory=lambda: list(DEFAULT_LEVELS),
+        description=(
+            "要看的日志级别，可选值：DEBUG / INFO / WARN / ERROR。"
+            "默认只看 WARN 和 ERROR，避免被 INFO 淹没"
+        ),
     )
     keyword: str | None = Field(
         default=None,
         description=(
-            "可选的关键字过滤（不区分大小写的子串匹配）。"
-            "常见用法：传一个 trace_id 查同一次请求的完整链路，"
+            "可选的关键字过滤（不区分大小写的子串匹配），也可以直接传一个 trace_id。"
+            "常见用法：传 trace_id 查同一次请求的完整链路，"
             "或传某个错误里的词缩小范围"
         ),
     )
-    limit: int = Field(default=50, le=200, description="最多返回多少条")
+    limit: int = Field(
+        default=50,
+        le=200,
+        description="最多返回多少条（1~200）。返回内容同时受 6000 字符预算限制",
+    )
 
 
 def build_query_logs_tool(store: LogStore, *, services: Sequence[str] = ()) -> Tool:
@@ -180,12 +198,17 @@ def build_query_logs_tool(store: LogStore, *, services: Sequence[str] = ()) -> T
     return Tool(
         name="query_logs",
         description=(
-            "查询某个服务在指定时间窗口内的日志。"
-            "排障的第一步通常就是它：先看有没有报错，再看报错从什么时间点开始。"
-            "默认只返回 WARN/ERROR，避免被 INFO 日志淹没。"
-            "如果结果为空，说明这个服务在这个时间窗口内没有异常日志 —— 这本身就是线索。"
-            "注意：日志行末尾的 trace=xxx 表示「同一次请求」。"
-            "可以把某个 trace_id 当作 keyword 再查一次，就能看到这次请求的完整链路。"
+            "查询某个服务在指定时间窗口内的日志，默认只返回 WARN/ERROR。\n"
+            "**排障的第二步**：拿到异常时间点之后，用它看具体报错长什么样、"
+            "从哪一行开始。\n"
+            "日志行末尾的 trace=xxx 表示「同一次请求」（跨所有服务共享）—— "
+            "把某个 trace_id 当 keyword 再查一次，就能看到这次请求的完整链路，"
+            "比盲目放大时间窗口有效得多。\n"
+            "局限：日志只给**症状**，通常不写原因 —— "
+            "「connection wait time 飙升」不等于「连接池满了」，"
+            "根因往往要去 get_config 或下游服务找。\n"
+            '典型调用：query_logs(service="order-service", '
+            'start="2026-01-01T14:02:00Z", end="2026-01-01T14:07:00Z")'
         ),
         args_model=QueryLogsArgs,
         func=_query,
