@@ -264,6 +264,12 @@ async def main() -> int:
         default=0.50,
         help="所有轮次加起来的成本上限（美元）。超过就停，默认 0.50",
     )
+    parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=2_000_000,
+        help="所有轮次加起来的 token 上限。超过就停，默认 200 万",
+    )
     parser.add_argument("--trace", action="store_true", help="打印工具调用轨迹")
     parser.add_argument("--offline", action="store_true", help="不调 LLM，只展示场景")
     parser.add_argument("-v", "--verbose", action="store_true", help="打印调试日志（含堆栈）")
@@ -300,6 +306,7 @@ async def main() -> int:
 
     passed = 0
     total_cost = 0.0
+    total_tokens = 0
     attempted = 0
     traces: list[str] = []
 
@@ -307,6 +314,14 @@ async def main() -> int:
         # ---- 总预算闸门（上线前审查 PRE-7）----
         # 单次诊断有 $0.10 硬上限，但 `--runs 100` 这种**多轮**调用原先没有任何全局保险丝。
         # 保险丝要装在「知道还要跑几次」的地方 —— 也就是这里，而不是单次诊断里。
+        if total_tokens >= args.max_total_tokens:
+            console.print(
+                f"[yellow]达到 token 预算 {args.max_total_tokens:,}"
+                f"（已用 {total_tokens:,}），停止剩余 {args.runs - index} 次。[/yellow]"
+            )
+            console.print("[dim]要跑完就调大 --max-total-tokens。[/dim]")
+            break
+
         if total_cost >= args.max_total_usd:
             console.print(
                 f"[yellow]达到总预算 ${args.max_total_usd:.4f}（已花 ${total_cost:.4f}），"
@@ -320,6 +335,7 @@ async def main() -> int:
         ok = points >= PASS_THRESHOLD
         passed += int(ok)
         total_cost += run.total_cost_usd
+        total_tokens += run.total_tokens
         if run.trace_path:
             traces.append(run.trace_path)
 

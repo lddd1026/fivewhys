@@ -20,6 +20,7 @@ agent 主循环的逻辑（工具分发、终止条件、错误处理、成本�
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Sequence
@@ -185,6 +186,46 @@ class OversizedResponseError(RuntimeError):
 MAX_RESPONSE_CHARS_ALLOWED = 100_000
 
 
+# --------------------------------------------------------------------------
+# token 估算（**只是估算**，硬指标用 provider 报的 usage）
+# --------------------------------------------------------------------------
+
+# 一个 token 大约几个字符。英文约 4，中文约 1.5，代码与日志混排实测接近 3。
+#
+# 为什么不用 tiktoken 精确算：它首次使用要**联网下载编码表**，而 FR-14a 要求
+# 「无需 API Key、离线也能跑通自检」。为了一个预算估算引入联网依赖不划算 ——
+# 与 tools/_render.py 的 MAX_RESPONSE_CHARS 是同一个理由、同一个比例。
+CHARS_PER_TOKEN = 3
+
+
+def estimate_tokens(text: str) -> int:
+    """按字符数粗略估 token。**只用于「发出去之前」的预检。**
+
+    真正记账的数字一律用 provider 返回的 ``usage``：那是硬指标，这是估算。
+    两者用途不同，不要混：估算用来「提前拦」，usage 用来「事后算」。
+    """
+    return max(1, len(text) // CHARS_PER_TOKEN)
+
+
+def estimate_request_tokens(
+    messages: Sequence[Message],
+    tools: Sequence[dict[str, Any]],
+) -> int:
+    """估一次请求的输入 token —— 在**发出去之前**判断上下文会不会撑爆。
+
+    为什么要算这个：每步都把工具返回追加进历史，prompt 会自己长大。
+    20 步下来可能到几十万 token，provider 会直接报上下文超限 ——
+    与其等它报错（那时钱已经花了），不如提前停，并说清是谁涨满了。
+    """
+    chars = 0
+    for message in messages:
+        chars += len(str(message.get("content") or ""))
+        for call in message.get("tool_calls") or []:
+            chars += len(str(call))
+    chars += len(json.dumps(list(tools), ensure_ascii=False))
+    return max(1, chars // CHARS_PER_TOKEN)
+
+
 def _assert_response_is_sane(*, content: str | None, calls: tuple[ToolCall, ...]) -> None:
     """回复大小不合常理时，早点报错。
 
@@ -233,6 +274,9 @@ def _estimate_cost(litellm_module: Any, response: Any) -> float:
 
 
 __all__ = [
+    "CHARS_PER_TOKEN",
+    "estimate_request_tokens",
+    "estimate_tokens",
     "MAX_RESPONSE_CHARS_ALLOWED",
     "LLMClient",
     "LLMResponse",

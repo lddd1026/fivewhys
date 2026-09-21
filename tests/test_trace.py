@@ -416,7 +416,10 @@ async def test_the_whole_trace_never_contains_a_secret(tmp_path: Path) -> None:
 
     from doubles import ScriptedLLM
 
-    os.environ["DEEPSEEK_API_KEY"] = "sk-CANARYtrace11223344556677889900"
+    # ⚠️ canary 里**必须带连字符**：纯字母数字的长串会被 tests/test_secrets.py
+    # 的密钥扫描当成真密钥 —— 那条规则在 FIV-19 里当场抓到了我自己写的这个值。
+    # 假值就该长得像假的。
+    os.environ["DEEPSEEK_API_KEY"] = "sk-CANARY-trace-not-a-real-key"
     try:
         _, writer = await _run(tmp_path, ScriptedLLM([submit()]))
         text = writer.path.read_text(encoding="utf-8")

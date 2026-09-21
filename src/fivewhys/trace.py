@@ -199,6 +199,7 @@ class TraceWriter:
             EVENT_FINISH,
             {
                 "stop_reason": run.stop_reason,
+                "stop_note": run.stop_note,
                 "error": run.error,
                 "steps": run.steps,
                 "tool_calls": len(run.tool_calls),
@@ -281,6 +282,7 @@ def summarize(path: Path) -> dict[str, Any]:
         "tool_calls": len(tools),
         "failed_tool_calls": sum(1 for t in tools if not t.get("ok")),
         "stop_reason": finish.get("stop_reason"),
+        "stop_note": finish.get("stop_note"),
         "error": finish.get("error"),
         "total_cost_usd": finish.get("total_cost_usd"),
         "total_tokens": finish.get("total_tokens"),

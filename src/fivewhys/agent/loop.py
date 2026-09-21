@@ -57,7 +57,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from fivewhys.agent.llm import LiteLLMClient, LLMClient, LLMResponse, Message, ToolCall
+from fivewhys.agent.llm import (
+    LiteLLMClient,
+    LLMClient,
+    LLMResponse,
+    Message,
+    ToolCall,
+    estimate_request_tokens,
+)
 from fivewhys.agent.prompts import build_system_prompt
 from fivewhys.config import Settings, get_settings
 from fivewhys.models import AgentRun, Diagnosis, ToolCallRecord
@@ -314,6 +321,19 @@ async def diagnose(
         for step in range(1, settings.max_steps + 1):
             run.steps = step
 
+            # ---- 上下文守卫：**发出去之前**先估一下（token 用量控制）----
+            # 每步都把工具返回追加进历史，prompt 会自己长大。等到 provider 报
+            # 「上下文超限」时，这一轮的钱已经花了 —— 提前停既省钱也能说清原因。
+            estimated = estimate_request_tokens(messages, tools)
+            if estimated > settings.max_context_tokens:
+                stop_reason = "max_tokens"
+                run.stop_note = (
+                    f"第 {step} 步的请求预估 {estimated:,} token，超过上下文上限 "
+                    f"{settings.max_context_tokens:,} —— 提前停止（历史被工具返回撑满了）"
+                )
+                logger.warning("诊断停止：%s", run.stop_note)
+                break
+
             if writer is not None:
                 writer.request(step=step, messages=list(messages))
 
@@ -406,8 +426,25 @@ async def diagnose(
             if run.diagnosis is not None:
                 break
 
+            # ---- token 用量控制：累计用量（provider 上报的硬数字）----
+            # 放在诊断检查**之后**：这一步已经交出合法结论的话，不该因为
+            # 「刚好多花了几个 token」而丢掉它。
+            if run.total_tokens > settings.max_total_tokens:
+                stop_reason = "max_tokens"
+                run.stop_note = (
+                    f"累计 {run.total_tokens:,} token，超过单次诊断上限 "
+                    f"{settings.max_total_tokens:,}（第 {step} 步后停止）"
+                )
+                logger.warning("诊断停止：%s", run.stop_note)
+                break
+
             if run.total_cost_usd > settings.max_cost_usd:
                 stop_reason = "max_cost"
+                run.stop_note = (
+                    f"累计 ${run.total_cost_usd:.4f}，超过单次诊断上限 "
+                    f"${settings.max_cost_usd:.4f}（第 {step} 步后停止）"
+                )
+                logger.warning("诊断停止：%s", run.stop_note)
                 break
 
     except Exception as exc:  # noqa: BLE001 —— 崩溃要记录成结果，而不是抛给调用方

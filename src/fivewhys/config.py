@@ -80,6 +80,29 @@ class Settings(BaseSettings):
     # 留一倍余量；2000 token 输出成本约 $0.0008，乘以 20 步仍远低于 $0.10。
     max_output_tokens: int = 2000
 
+    # ---- token 用量控制 ----
+    #
+    # 为什么在成本上限之外还要 token 上限：
+    #
+    # 1. **成本算不出来的时候，token 一定算得出来。** FIV-D3 那个 bug 就是
+    #    `completion_cost` 查不到模型价格 → 成本恒为 0 → 成本上限形同虚设。
+    #    token 是 provider 直接报的，不依赖价格表。
+    # 2. **上下文会自己长大。** 每步都把工具返回追加进历史，20 步下来 prompt
+    #    可能涨到几十万 token —— 那是「上下文溢出」，不是「花钱多」：
+    #    provider 会直接报错，而那时已经白花了一堆钱。
+    #
+    # 单次诊断累计 token 上限（按 provider **实际上报**的 usage 累加）。
+    # 实测一次 5 步诊断约 48k token —— 200k 够跑 4 倍长的调查，不会误伤。
+    max_total_tokens: int = 200_000
+
+    # 单次请求的上下文上限（**发出去之前**按字符估算，3 字符 ≈ 1 token）。
+    #
+    # 为什么要在发之前拦：deepseek-chat 的上下文窗口是 64k，
+    # 超了 provider 直接报错 —— 与其等它报错，不如提前停，
+    # 并且明确告诉人「是上下文涨满了」，而不是甩一个 provider 异常。
+    # 换模型（窗口更大/更小）时改这个值。
+    max_context_tokens: int = 60_000
+
     # 温度。0 是为了让诊断尽量可复现
     temperature: float = 0.0
 
