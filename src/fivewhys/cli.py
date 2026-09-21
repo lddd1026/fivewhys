@@ -216,6 +216,8 @@ def trace_cmd(
         f"  结果      : {info['stop_reason']}"
         + (f"  [red]{info['error']}[/red]" if info["error"] else "")
     )
+    if info.get("stop_note"):
+        console.print(f"  停止原因  : [yellow]{info['stop_note']}[/yellow]")
     console.print(
         f"  规模      : {info['steps']} 步 / {info['tool_calls']} 次工具调用"
         f"（失败 {info['failed_tool_calls']}）"

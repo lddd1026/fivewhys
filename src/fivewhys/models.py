@@ -197,7 +197,16 @@ class AgentRun(BaseModel):
     total_tokens: int = 0
     stop_reason: str = Field(
         default="unknown",
-        description="为什么停下来：submitted / max_steps / max_cost / error",
+        description=(
+            "为什么停下来：submitted / max_why_depth / max_steps / max_cost / max_tokens / error"
+        ),
+    )
+    stop_note: str | None = Field(
+        default=None,
+        description=(
+            "停止的可读说明，例如「累计 205,000 token，超过上限 200,000」。"
+            "只有触发了某个上限时才有值 —— 报表和复盘的第一个线索就是它"
+        ),
     )
     error: str | None = Field(
         default=None,
