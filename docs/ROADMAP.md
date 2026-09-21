@@ -1,5 +1,8 @@
 # fivewhys 路线图
 
+> 上游文档：[REQUIREMENTS.md](REQUIREMENTS.md)（要什么、为什么）。
+> 本文档回答「分几步做、每步做到什么算完成」。
+
 九个里程碑。**每个都有验收标准，达不到就不进入下一个。**
 
 三条拆解原则：
@@ -25,17 +28,16 @@
 
 ---
 
-## ⬜ M1 · 端到端最细竖切 · 3 天 【当前】
+## 🟡 M1 · 端到端最细竖切 · 3 天 【当前】
 
 **目标**：一个假服务、一种故障、一个工具，agent 能诊断出来。
 
-- [ ] **M1-2** 实现 `mock/scenarios.py::inject_db_pool_exhausted`
-      规格见文件头部注释。要点：**日志只留现象，不留答案**
-- [ ] **M1-3** 实现 `tools/query_logs.py::_query`
-      自测脚本见文件头部注释
-- [ ] **M1-4** 实现 `agent/loop.py::diagnose`
-      六步说明见文件头部注释
-- [ ] **M1-5** 手工跑一次：注入故障 → 问 agent → 看它能否查日志得出正确结论
+对应需求：FR-1（1 个服务）、FR-2（1 种故障）、FR-3、FR-4、FR-5（`query_logs`）、FR-6
+
+- [x] **M1-2** 实现 `mock/scenarios.py::inject_db_pool_exhausted` ✅ 已完成（FIV-1）
+- [ ] **M1-3** 实现 `tools/query_logs.py::_query` ⬜ FIV-2
+- [ ] **M1-4** 实现 `agent/loop.py::diagnose` ⬜ FIV-4
+- [ ] **M1-5** 手工跑一次：注入故障 → 问 agent → 看它能否查日志得出正确结论 ⬜ FIV-5
 
 **验收**：跑 5 次，至少 3 次给出正确根因。
 

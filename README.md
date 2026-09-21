@@ -72,12 +72,32 @@ fivewhys/
 ├── tests/
 ├── benchmarks/          # 评测执行器与结果（M6）
 └── docs/
-    └── ROADMAP.md       # 九个里程碑与验收标准
+    ├── REQUIREMENTS.md  # 需求说明：要什么、为什么、做到什么算完成
+    ├── ROADMAP.md       # 九个里程碑与验收标准
+    ├── TASKS.md         # 任务看板
+    ├── WORKFLOW.md      # 每个任务的 7 步开发流程
+    └── DEV.md           # 环境约定（不装 C 盘等）
 ```
+
+## 文档体系
+
+```
+REQUIREMENTS.md   要什么、为什么          ← 上游，稳定
+      ↓
+ROADMAP.md        分几步做、验收标准
+      ↓
+TASKS.md          具体任务
+      ↓
+代码
+```
+
+**需求变了，往下三层都要跟着改。**
 
 ## 路线图
 
-见 [docs/ROADMAP.md](docs/ROADMAP.md)。当前进度：**M0 完成**。
+- [需求说明](docs/REQUIREMENTS.md) —— 先看这个，理解项目要解决什么问题
+- [路线图](docs/ROADMAP.md) —— 九个里程碑与验收标准
+- **当前进度：M1 进行中**（M0 已完成，FIV-1 已完成）
 
 ## 相关项目（以及本项目的区别）
 
