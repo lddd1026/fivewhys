@@ -10,6 +10,10 @@
 
 这也是 NFR-11 存在的原因。
 
+**返回格式的拼装、预算裁剪、空结果写法现在是 5 个工具共用的**
+（见 :mod:`fivewhys.tools._render`）—— 预算必须只有一份实现，
+否则它就不是预算。
+
 ## 关于预算为什么按「字符数」而不是「token 数」
 
 NFR-11 要求单次返回 ≤ 2000 token。理论上应该直接数 token，但：
@@ -41,16 +45,24 @@ NFR-11 要求单次返回 ≤ 2000 token。理论上应该直接数 token，但�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from pydantic import BaseModel, Field
 
 from fivewhys.mock.logstore import LogStore
 from fivewhys.tools import Tool
+from fivewhys.tools._render import (
+    MAX_RESPONSE_CHARS,
+    blank_result,
+    fit_lines,
+    render_block,
+    unknown_service,
+)
 
-# NFR-11：单次工具调用返回 ≤ 2000 token。
-# 按英文约 3 字符/token 保守换算 —— 详见模块 docstring 里的说明。
-MAX_RESPONSE_CHARS = 6000
+# 从 _render 转出来，保持 `from fivewhys.tools.query_logs import MAX_RESPONSE_CHARS` 可用。
+# 预算现在由五个工具共用一份实现（见 _render 的说明），但这个名字在 FIV-2 就公开了。
+__all__ = ["MAX_RESPONSE_CHARS", "QueryLogsArgs", "build_query_logs_tool"]
 
 
 class QueryLogsArgs(BaseModel):
@@ -74,11 +86,17 @@ class QueryLogsArgs(BaseModel):
     limit: int = Field(default=50, le=200, description="最多返回多少条")
 
 
-def build_query_logs_tool(store: LogStore) -> Tool:
+def build_query_logs_tool(store: LogStore, *, services: Sequence[str] = ()) -> Tool:
     """把 LogStore 绑进工具里。
 
     用闭包而不是全局变量：测试时可以给每个场景一个独立的 store，
     并发跑多个场景时不会互相污染。
+
+    Args:
+        store: 日志仓库。
+        services: 这个场景里存在的服务名。用来在模型写错服务名时纠正它 ——
+            日志仓库本身没有「服务清单」，光看它分不清「服务不存在」
+            和「服务存在但这段窗口没有日志」。
     """
 
     def _query(
@@ -94,6 +112,9 @@ def build_query_logs_tool(store: LogStore) -> Tool:
                 f"参数有误：end（{end:%H:%M:%S}）早于 start（{start:%H:%M:%S}）。"
                 "请给出正确的时间窗口。"
             )
+
+        if services and service not in services:
+            return unknown_service(service, services)
 
         # 级别统一成大写，容忍模型传 "warn" 这种写法
         wanted = {lv.strip().upper() for lv in levels}
@@ -123,36 +144,38 @@ def build_query_logs_tool(store: LogStore) -> Tool:
         # 空结果也是线索 —— 明确告诉模型这一点，避免它以为工具坏了
         if total == 0:
             hint = f"，关键字「{keyword}」" if keyword else ""
-            return (
-                f"共命中 0 条：{service} 在 {window} 之间没有 {level_text} 级别的日志{hint}。\n"
-                "这本身就是线索：该服务在这个时间窗口内没有异常。"
-                "可以试试放宽时间窗口、换一个服务，或降低级别过滤。"
+            return blank_result(
+                f"共命中 0 条：{service} 在 {window} 之间没有 {level_text} 级别的日志{hint}",
+                clue=(
+                    "该服务在这个时间窗口内没有异常。"
+                    "可以试试放宽时间窗口、换一个服务，或降低级别过滤。"
+                ),
             )
 
-        lines: list[str] = []
-        used = 0
-        for entry in matched[:limit]:
-            line = f"{entry.ts:%H:%M:%S} {entry.level.value:<5} {entry.message}"
-            if entry.trace_id:
-                line += f"  trace={entry.trace_id}"
-            cost = len(line) + 1  # +1 是换行符
-            if used + cost > MAX_RESPONSE_CHARS:
-                break
-            lines.append(line)
-            used += cost
+        lines, truncated = fit_lines(
+            (
+                f"{entry.ts:%H:%M:%S} {entry.level.value:<5} {entry.message}"
+                + (f"  trace={entry.trace_id}" if entry.trace_id else "")
+                for entry in matched
+            ),
+            limit=limit,
+        )
 
-        header = [f"共命中 {total} 条，显示 {len(lines)} 条"]
-        if len(lines) < total:
-            header.append(
-                f"（受 limit={limit} 和 {MAX_RESPONSE_CHARS} 字符预算限制，"
-                "如需更多请缩小时间窗口或加关键字）"
-            )
         meta = f"服务={service}  时间={window}  级别={level_text}"
         if keyword:
             meta += f"  关键字={keyword}"
-        header.append(meta)
 
-        return "\n".join(header) + "\n" + "\n".join(lines)
+        return render_block(
+            f"共命中 {total} 条，显示 {len(lines)} 条",
+            note=(
+                f"（受 limit={limit} 和 {MAX_RESPONSE_CHARS} 字符预算限制，"
+                "如需更多请缩小时间窗口或加关键字）"
+                if truncated
+                else None
+            ),
+            meta=meta,
+            lines=lines,
+        )
 
     return Tool(
         name="query_logs",

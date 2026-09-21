@@ -249,7 +249,7 @@ async def test_full_loop_with_real_client_and_faked_transport(
     from fivewhys.mock.logstore import LogStore
     from fivewhys.mock.scenarios import inject_db_pool_exhausted
     from fivewhys.mock.service import MockService
-    from fivewhys.tools import build_registry
+    from fivewhys.tools import DataSource, build_registry
 
     t0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
     fault_at = t0 + timedelta(minutes=5)
@@ -283,7 +283,7 @@ async def test_full_loop_with_real_client_and_faked_transport(
     run = await diagnose(
         scenario_id=truth.scenario_id,
         question="order-service 从 14:05 前后开始错误率飙升，帮忙定位一下原因",
-        registry=build_registry(store),
+        registry=build_registry(DataSource.logs_only(store)),
         llm=llm,
         settings=Settings(_env_file=None, max_steps=5, max_cost_usd=1.0),  # type: ignore[call-arg]
     )

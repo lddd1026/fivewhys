@@ -116,6 +116,24 @@ python scripts/demo_m1.py --runs 3 --trace
   `tests/test_e2e_demo.py::test_env_var_prefix_is_fivewhys` 守着这一点。
 - 假服务用 HTTP/1.1 + `Content-Length`，注意别漏 `Content-Length` 否则客户端会一直等。
 
+## 看看工具给 agent 看了什么
+
+工具返回值会直接进模型的上下文，所以「agent 到底看到了什么」是最该亲眼确认的事。
+这个脚本把 5 个工具的**原始返回**原样打印出来，不调用任何 LLM：
+
+```powershell
+python scripts/inspect_scenario.py                    # 用 data/scenarios 里的场景包
+python scripts/inspect_scenario.py -c dependency_5xx  # 换一种故障
+python scripts/inspect_scenario.py -c no_fault        # 健康场景
+python scripts/inspect_scenario.py --full             # 不截断输出
+```
+
+它按一次真实排障的顺序调用工具（指标 → 日志 → 配置 → 发布 → 拓扑），
+最后自检两件事：日志里没有答案词、答案能在配置里查到。
+
+**读一遍输出**，你就能判断：线索够不够、哪一步查了等于没查、
+答案会不会不小心从日志里泄漏出去。
+
 ## 场景快照：证明评测集没被改过
 
 ```powershell
