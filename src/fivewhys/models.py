@@ -171,6 +171,13 @@ class AgentRun(BaseModel):
         default="unknown",
         description="为什么停下来：submitted / max_steps / max_cost / error",
     )
+    error: str | None = Field(
+        default=None,
+        description=(
+            "运行异常的信息，仅在 stop_reason == 'error' 时有值。"
+            "需求 §6.2：异常不计入准确率分母，单独统计崩溃率"
+        ),
+    )
 
     @property
     def duration_s(self) -> float | None:
