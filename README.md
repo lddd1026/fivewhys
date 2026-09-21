@@ -194,7 +194,8 @@ fivewhys/
     ├── ROADMAP.md       # 9 个目标与验收标准
     ├── TASKS.md         # 任务看板
     ├── WORKFLOW.md      # 每个任务的 7 步开发流程
-    └── DEV.md           # 环境约定（不装 C 盘等）
+    ├── DEV.md           # 环境约定（不装 C 盘等）
+    └── RELEASE_REVIEW.md # 上线前审查报告（严重度分级 + go/no-go）
 ```
 
 ## 文档体系
