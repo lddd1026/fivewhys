@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from fivewhys.mock.logstore import LogStore
+from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
 from fivewhys.models import LogLevel
 
@@ -82,12 +83,16 @@ class MockSystem:
         *,
         specs: tuple[ServiceSpec, ...] = DEFAULT_TOPOLOGY,
         seed: int = 0,
+        metrics: MetricStore | None = None,
     ) -> None:
         if not specs:
             raise ValueError("拓扑不能为空")
 
         self.store = store
         self.seed = seed
+        # 指标仓库。可以由外部传入 —— 一个场景的日志和指标必须装在同一个
+        # 场景包里（见 FIV-9），所以不能每次自己 new 一个。
+        self.metrics = metrics if metrics is not None else MetricStore()
         self._specs: dict[str, ServiceSpec] = {spec.name: spec for spec in specs}
         self._rng = random.Random(seed)  # 系统级随机源：只用来生成 trace_id 和调度
 
@@ -206,6 +211,9 @@ class MockSystem:
             cursor,
             trace_id=trace,
         )
+        # 指标与日志**同源**：上面这条完成日志，对应下面这一条采样。
+        # 不允许在这里另编一个耗时 —— 那会让日志和指标互相矛盾。
+        self.metrics.record_request(cursor, name, total_ms, status=200)
         return cursor
 
     def normal_operation(
