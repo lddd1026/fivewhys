@@ -20,10 +20,13 @@ agent 主循环的逻辑（工具分发、终止条件、错误处理、成本�
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 # ⚠️ 必须在【任何地方 import litellm 之前】执行，所以放在模块级而不是构造函数里。
 #
@@ -144,14 +147,35 @@ class LiteLLMClient:
 
 
 def _estimate_cost(litellm_module: Any, response: Any) -> float:
-    """估算本次调用花了多少钱。
+    """本次调用花了多少钱。
 
     成本统计是 NFR-2 的判定依据，但它**不能让主流程崩掉** ——
-    新模型可能不在 litellm 的价格表里，那时宁可为 0 也不要抛异常。
+    算不出来时宁可为 0 也不要抛异常。
+
+    ## ⚠️ 为什么先读 ``_hidden_params``，而不是直接 ``completion_cost()``（FIV-D3）
+
+    ``litellm.completion_cost(completion_response=...)`` 会拿**响应里回的 model 名**
+    去查价格表。而 provider 回的模型名未必等于你请求的那个别名 ——
+    实测请求 ``deepseek/deepseek-chat`` 时，DeepSeek 回的是 ``deepseek-flash``，
+    于是查表失败、抛异常，被这里的 ``except`` 吞掉，**成本永远是 0.0000**。
+
+    而 litellm 在 ``response._hidden_params["response_cost"]`` 里**已经算好了**
+    这一次调用的钱（它用的是请求时的别名）。先读它，才是对的。
+
+    这个 bug 的后果不是「少算几厘钱」，是**一个要写进 README 的指标是假的**：
+    「平均成本 $0.0000」看起来像不要钱，实际上每次都花了钱。
+    只有拿真实 key 跑一次才会发现 —— 假 LLM 服务返回的 usage 也让成本算不出来，
+    所以离线测试全绿。
     """
+    hidden = getattr(response, "_hidden_params", None) or {}
+    cost = hidden.get("response_cost")
+    if cost is not None:
+        return float(cost)
+
     try:
         return float(litellm_module.completion_cost(completion_response=response) or 0.0)
     except Exception:  # noqa: BLE001 —— 成本估算失败不该影响诊断
+        logger.debug("算不出这次调用的成本，按 0 计", exc_info=True)
         return 0.0
 
 

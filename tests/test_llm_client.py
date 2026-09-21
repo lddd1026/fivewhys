@@ -68,9 +68,16 @@ class FakeResponse:
         self,
         message: FakeMessage,
         usage: FakeUsage | None = None,
+        *,
+        model: str | None = None,
+        hidden: dict[str, Any] | None = None,
     ) -> None:
         self.choices = [FakeChoice(message)]
         self.usage = usage
+        # 真实响应里这两个字段都在：model 是 **provider 回的那个名字**
+        # （未必等于你请求的别名），_hidden_params 里带着 litellm 算好的成本。
+        self.model = model
+        self._hidden_params = hidden or {}
 
 
 @pytest.fixture
@@ -134,6 +141,72 @@ async def test_missing_usage_defaults_to_zero(client: Any) -> None:
     assert result.prompt_tokens == 0
     assert result.completion_tokens == 0
     assert result.total_tokens == 0
+
+
+# --------------------------------------------------------------------------
+# ⭐ 成本统计（FIV-D3）
+#
+# 这条以前是恒为 0 的：litellm.completion_cost() 拿**响应里回的 model 名**查价格表，
+# 而 provider 回的名字未必等于请求的别名 —— 实测请求 deepseek/deepseek-chat 时
+# DeepSeek 回的是 deepseek-flash，查表失败、抛异常、被 except 吞掉，
+# 于是「平均成本」永远显示 $0.0000。
+#
+# 一个要写进 README 的指标是假的 —— 而且只有拿真实 key 跑一次才会发现。
+# --------------------------------------------------------------------------
+
+
+async def test_cost_comes_from_hidden_params(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """litellm 已经把这次调用的钱算好放在 _hidden_params 里了，直接用它。"""
+    import litellm
+
+    def explode(**_kwargs: Any) -> float:
+        raise Exception("This model isn't mapped yet")
+
+    monkeypatch.setattr(litellm, "completion_cost", explode)
+
+    response = FakeResponse(
+        FakeMessage("ok", None),
+        FakeUsage(9, 1),
+        model="deepseek-flash",  # provider 回的名字，和请求的别名不一样
+        hidden={"response_cost": 2.94e-06},
+    )
+    instance = client(lambda _: response)
+    result = await instance.complete([], [])
+
+    assert result.cost_usd == pytest.approx(2.94e-06), (
+        "成本没有从 _hidden_params 取 —— 那它永远是 0，README 里的数字就是假的"
+    )
+
+
+async def test_cost_falls_back_to_completion_cost(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没有 _hidden_params 时退回 completion_cost。"""
+    import litellm
+
+    monkeypatch.setattr(litellm, "completion_cost", lambda **_kwargs: 0.5)
+
+    instance = client(lambda _: FakeResponse(FakeMessage("ok", None), FakeUsage(1, 1)))
+    result = await instance.complete([], [])
+
+    assert result.cost_usd == pytest.approx(0.5)
+
+
+async def test_cost_is_zero_when_it_cannot_be_determined(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """算不出来时按 0 计，但**不能抛异常** —— 成本统计不该让诊断崩掉。"""
+    import litellm
+
+    def explode(**_kwargs: Any) -> float:
+        raise Exception("unknown model")
+
+    monkeypatch.setattr(litellm, "completion_cost", explode)
+
+    instance = client(lambda _: FakeResponse(FakeMessage("ok", None), FakeUsage(1, 1)))
+    result = await instance.complete([], [])
+
+    assert result.cost_usd == 0.0
 
 
 async def test_none_arguments_become_empty_object(client: Any) -> None:
