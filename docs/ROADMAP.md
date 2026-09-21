@@ -198,7 +198,7 @@ FR-6、FR-15（简化版场景包）
 | ---- | ---- | ---- |
 | FIV-19 | **trace 落盘**：每步 prompt / 响应 / 工具 / token / 成本 | ✅ |
 | FIV-17 | 结构化输出约束 + **证据来源校验**（FR-8） | ✅ |
-| FIV-18 | 终止条件：5 Whys 深度 / max_steps / max_cost | ⬜ |
+| FIV-18 | 终止条件：5 Whys 深度 / max_steps / max_cost / max_tokens | ✅ |
 | FIV-16 | litellm 多模型接入（约束 C-7：评测期间固定模型） | ⬜ |
 
 **交付物**：`runs/<run_id>/trace.jsonl` 记录完整轨迹

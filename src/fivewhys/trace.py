@@ -283,6 +283,8 @@ def summarize(path: Path) -> dict[str, Any]:
         "failed_tool_calls": sum(1 for t in tools if not t.get("ok")),
         "stop_reason": finish.get("stop_reason"),
         "stop_note": finish.get("stop_note"),
+        # 追问层数：M6 的「平均追问层数 / 用满预算的比例」直接取这个
+        "why_depth": len((finish.get("diagnosis") or {}).get("why_chain") or []),
         "error": finish.get("error"),
         "total_cost_usd": finish.get("total_cost_usd"),
         "total_tokens": finish.get("total_tokens"),
