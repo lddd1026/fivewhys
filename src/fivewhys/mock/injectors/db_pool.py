@@ -35,18 +35,23 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fivewhys.mock.changes import ConfigStore
 from fivewhys.mock.injectors import InjectionContext, register
-from fivewhys.mock.injectors._base import FaultScript
+from fivewhys.mock.injectors._base import DEFAULT_TRAFFIC_INTERVAL_S, FaultScript
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
 from fivewhys.models import FaultCategory, GroundTruth
 
+if TYPE_CHECKING:
+    from fivewhys.mock.topology import MockSystem
+
 # 故障持续时间
 DURATION = timedelta(minutes=5)
 
-# 故障期间背景噪声的间隔（秒）。
+# 故障期间背景噪声的间隔（秒）—— 由 :data:`DEFAULT_TRAFFIC_INTERVAL_S` 决定。
+# 保留这个名字是因为它在 FIV-1 就公开了，测试和文档都在引用。
 #
 # ⚠️ 它对应的吞吐（约 0.33 QPS）明显低于正常时期的 2 QPS —— **这是有意的**。
 #
@@ -58,7 +63,7 @@ DURATION = timedelta(minutes=5)
 #   QPS 下降     <- 指向「影响面有多大」
 #
 # **三个都不指向根因。** 指标负责「发现异常」，查明原因还得靠日志和配置。
-NOISE_INTERVAL_S = 3.0
+NOISE_INTERVAL_S = DEFAULT_TRAFFIC_INTERVAL_S
 
 # 触发故障的配置变更内容
 HEALTHY_POOL_SIZE = 50
@@ -76,9 +81,14 @@ def inject_db_pool(
     rng: random.Random,
     metrics: MetricStore | None = None,
     configs: ConfigStore | None = None,
+    system: MockSystem | None = None,
 ) -> GroundTruth:
-    """核心逻辑。两种入口都调它。"""
-    script = FaultScript(service=service, metrics=metrics)
+    """核心逻辑。两种入口都调它。
+
+    ``system`` 传了就会生成**跨服务**的背景流量（FIV-D1）；
+    不传（M1 的单服务用法）则退化成单服务噪声。
+    """
+    script = FaultScript(service=service, metrics=metrics, system=system)
 
     start = at
     end = start + DURATION
@@ -132,8 +142,10 @@ def inject_db_pool(
             )
             cursor += timedelta(seconds=rng.randint(2, 8))
 
-    # ---- 背景噪声：故障期间正常请求照常进来 ----
-    script.background_traffic(start, end, rng=rng, interval_s=NOISE_INTERVAL_S)
+    # ---- 背景噪声：整个系统照常有流量 ----
+    # ⚠️ 必须走完整调用链（FIV-D1）：否则没被点名的下游服务在故障窗口里
+    # 一条采样都没有 —— 那本身就是「有故障」的信号。
+    script.system_traffic(start, end, rng=rng)
     script.flush()
 
     return GroundTruth(
@@ -173,6 +185,7 @@ def inject(ctx: InjectionContext) -> GroundTruth:
         rng=ctx.rng,
         metrics=ctx.metrics,
         configs=ctx.configs,
+        system=ctx.system,
     )
 
 

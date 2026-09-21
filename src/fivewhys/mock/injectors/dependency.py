@@ -31,11 +31,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fivewhys.mock.injectors import InjectionContext, register
-from fivewhys.mock.injectors._base import FaultScript, record_config_change
+from fivewhys.mock.injectors._base import (
+    DEFAULT_TRAFFIC_INTERVAL_S,
+    FaultScript,
+    record_config_change,
+)
 from fivewhys.models import FaultCategory, GroundTruth
 
 DURATION = timedelta(minutes=5)
-NOISE_INTERVAL_S = 3.0
+NOISE_INTERVAL_S = DEFAULT_TRAFFIC_INTERVAL_S
 
 CULPRIT = "inventory-service"
 HEALTHY_DB_URL = "postgres://stock-db:5432/stock"
@@ -53,8 +57,8 @@ def inject(ctx: InjectionContext) -> GroundTruth:
     culprit = ctx.system.service(CULPRIT)
     rng = ctx.rng
 
-    order_script = FaultScript(service=order, metrics=ctx.metrics)
-    culprit_script = FaultScript(service=culprit, metrics=ctx.metrics)
+    order_script = FaultScript(service=order, metrics=ctx.metrics, system=ctx.system)
+    culprit_script = FaultScript(service=culprit, metrics=ctx.metrics, system=ctx.system)
 
     start = ctx.at
     end = start + DURATION
@@ -104,15 +108,11 @@ def inject(ctx: InjectionContext) -> GroundTruth:
             )
             cursor += timedelta(seconds=rng.randint(2, 8))
 
-    # ---- 背景噪声：两个服务都要有正常流量，否则"这个服务全是错误"太显眼 ----
-    order_script.background_traffic(start, end, rng=rng, interval_s=NOISE_INTERVAL_S)
-    culprit_script.background_traffic(
-        start,
-        end,
-        rng=rng,
-        path="/api/v1/reserve",
-        interval_s=NOISE_INTERVAL_S * 2,
-    )
+    # ---- 背景噪声：整个系统照常有流量 ----
+    # ⚠️ 必须走完整调用链（FIV-D1）。原来这里是给 order 和 culprit 各发各的噪声，
+    # 结果第三个服务在故障窗口里一条采样都没有 —— 而 agent 要顺着调用链排查，
+    # 下游查不到流量这条关键手法就被抽掉了。
+    order_script.system_traffic(start, end, rng=rng)
 
     order_script.flush()
     culprit_script.flush()

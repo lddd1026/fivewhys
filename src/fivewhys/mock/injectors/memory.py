@@ -70,7 +70,7 @@ _GC_TIMEOUT_THRESHOLD = 0.85
 def inject(ctx: InjectionContext) -> GroundTruth:
     service = ctx.service
     rng = ctx.rng
-    script = FaultScript(service=service, metrics=ctx.metrics)
+    script = FaultScript(service=service, metrics=ctx.metrics, system=ctx.system)
 
     start = ctx.at
     end = start + DURATION
@@ -140,6 +140,12 @@ def inject(ctx: InjectionContext) -> GroundTruth:
             )
 
         cursor += step
+
+    # ---- 背景噪声：整个系统照常有流量（FIV-D1）----
+    # ⚠️ 这一段是 FIV-D1 补上的：这个注入器原来只有上面那些「堆占用逐步上升」
+    # 的采样，故障窗口里别的服务一条数据都没有 —— 那本身就是「有故障」的信号。
+    # 跨服务流量走的是正常延迟，所以 P95 的上升趋势仍然由上面的采样主导演示。
+    script.system_traffic(start, end, rng=rng)
 
     script.flush()
 

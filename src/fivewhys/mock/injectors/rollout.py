@@ -34,11 +34,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fivewhys.mock.injectors import InjectionContext, register
-from fivewhys.mock.injectors._base import FaultScript, record_config_change
+from fivewhys.mock.injectors._base import (
+    DEFAULT_TRAFFIC_INTERVAL_S,
+    FaultScript,
+    record_config_change,
+)
 from fivewhys.models import FaultCategory, GroundTruth
 
 DURATION = timedelta(minutes=5)
-NOISE_INTERVAL_S = 3.0
+NOISE_INTERVAL_S = DEFAULT_TRAFFIC_INTERVAL_S
 
 PREVIOUS_VERSION = "v1.3.9"
 BAD_VERSION = "v1.4.2"
@@ -54,7 +58,7 @@ DEPLOY_NOTE = "deploy order-service v1.4.2 (canary -> full)"
 def inject(ctx: InjectionContext) -> GroundTruth:
     service = ctx.service
     rng = ctx.rng
-    script = FaultScript(service=service, metrics=ctx.metrics)
+    script = FaultScript(service=service, metrics=ctx.metrics, system=ctx.system)
 
     start = ctx.at
     end = start + DURATION
@@ -108,7 +112,8 @@ def inject(ctx: InjectionContext) -> GroundTruth:
             script.warn(cursor, f"request latency {latency_ms}ms exceeds SLO 500ms")
             cursor += timedelta(seconds=rng.randint(2, 6))
 
-    script.background_traffic(start, end, rng=rng, interval_s=NOISE_INTERVAL_S)
+    script.system_traffic(start, end, rng=rng)
+    # ⚠️ 走完整调用链，别用 background_traffic（见 _base.system_traffic，FIV-D1）
     script.flush()
 
     return GroundTruth(
