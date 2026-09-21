@@ -114,14 +114,20 @@ class Diagnosis(BaseModel):
     root_cause_service: str = Field(description="根因所在的服务名")
     fault_category: FaultCategory
     confidence: Confidence
-    why_chain: list[WhyStep] = Field(default_factory=list, description="5 Whys 追问链")
-    evidence: list[Evidence] = Field(default_factory=list)
+    # 以下字段全部**必填**（没有默认值）—— 需求 FR-6 要求 Diagnosis 必须包含它们。
+    # 一旦给了默认值，它们就不在 JSON Schema 的 required 里，模型可以整段省略，
+    # 最后交上来的就只是一句根因，失去了「结构化输出」的意义。
+    # 这个坑是 FIV-5 的起飞前检查发现的（当时 required 只有 4 个字段）。
+    #
+    # 更进一步的约束（why_chain 至少几层、evidence 必须对应真实工具调用）
+    # 留到 M5 / FIV-17 —— 那是「结构化输出约束」要优化的地方。
+    why_chain: list[WhyStep] = Field(description="5 Whys 追问链")
+    evidence: list[Evidence] = Field(description="支撑结论的证据，必须来自真实的工具调用")
     ruled_out: list[str] = Field(
-        default_factory=list,
         description="被排除的嫌疑及排除理由 —— 这一步最能体现推理过程",
     )
-    suggested_fix: str = Field(default="", description="建议的修复动作")
-    summary: str = Field(default="", description="给值班工程师看的简短总结")
+    suggested_fix: str = Field(description="建议的修复动作")
+    summary: str = Field(description="给值班工程师看的简短总结，要短到能直接贴进事故群")
 
 
 # --------------------------------------------------------------------------

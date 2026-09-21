@@ -20,6 +20,7 @@ agent 主循环的逻辑（工具分发、终止条件、错误处理、成本�
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -76,6 +77,16 @@ class LiteLLMClient:
     """
 
     def __init__(self, *, model: str, temperature: float = 0.0) -> None:
+        # ⚠️ 必须在 import litellm 之前设置。
+        #
+        # litellm 启动时会去 GitHub 拉最新的模型价格表；网络不通时它重试 3 次
+        # 才回退到本地备份 —— 实测这一下要花约 30 秒，直接爆掉 NFR-3 的延迟预算。
+        # 因为它不报错、只是慢，很容易被忽略。
+        #
+        # 我们只需要「大致准确」的成本估算（NFR-2 是软约束），本地表足够。
+        # 这个坑是 FIV-5 的起飞前检查发现的。
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
         import litellm
 
         self._litellm = litellm
