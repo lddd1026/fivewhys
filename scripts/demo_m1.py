@@ -35,16 +35,14 @@ from fivewhys.config import get_settings  # noqa: E402
 from fivewhys.mock.logstore import LogStore  # noqa: E402
 from fivewhys.mock.scenarios import inject_db_pool_exhausted  # noqa: E402
 from fivewhys.mock.service import MockService  # noqa: E402
-from fivewhys.models import AgentRun, Diagnosis, GroundTruth  # noqa: E402
+from fivewhys.models import AgentRun, GroundTruth  # noqa: E402
+from fivewhys.scoring import PASS_THRESHOLD, score_diagnosis  # noqa: E402
 from fivewhys.tools import build_registry  # noqa: E402
 
 console = Console()
 
 T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 FAULT_AT = T0 + timedelta(minutes=30)
-
-# 需求 §6.1：总分 ≥ 80% 记为「判定为对」
-PASS_THRESHOLD = 0.8
 
 API_KEY_BY_PROVIDER = {
     "deepseek": "DEEPSEEK_API_KEY",
@@ -73,36 +71,12 @@ def build_scenario(seed: int) -> tuple[LogStore, GroundTruth, str]:
 
 
 # --------------------------------------------------------------------------
-# 判分（需求 §6.1）
+# 判分
+#
+# 规则实现在 fivewhys.scoring 里（正式模块，有测试覆盖），
+# 因为它是整个项目的核心资产 —— 判分错了，「准确率」这个数字就没有意义。
+# M6 的评测台会直接复用它。
 # --------------------------------------------------------------------------
-
-
-def score(diagnosis: Diagnosis, truth: GroundTruth) -> tuple[float, list[str]]:
-    """按需求 §6.1 判分：根因服务 40% + 故障类别 40% + 根因描述 20%。
-
-    ⚠️ 关键词**只在 root_cause 和 summary 里扫，绝不扫 ruled_out** ——
-    否则 agent 写「我排除了连接池问题」会因为出现「连接池」而被误判为命中。
-    """
-    notes: list[str] = []
-    points = 0.0
-
-    if diagnosis.root_cause_service == truth.root_cause_service:
-        points += 0.4
-    else:
-        notes.append(f"服务错（答 {diagnosis.root_cause_service}）")
-
-    if diagnosis.fault_category == truth.fault_category:
-        points += 0.4
-    else:
-        notes.append(f"类别错（答 {diagnosis.fault_category}）")
-
-    text = f"{diagnosis.root_cause} {diagnosis.summary}".lower()
-    if any(keyword.lower() in text for keyword in truth.match_keywords):
-        points += 0.2
-    else:
-        notes.append("根因描述未命中关键词")
-
-    return points, notes
 
 
 # --------------------------------------------------------------------------
@@ -177,8 +151,8 @@ async def run_one(seed: int, show_trace: bool) -> tuple[AgentRun, float, list[st
     if run.diagnosis is None:
         return run, 0.0, [f"未提交结论（{run.stop_reason}）"]
 
-    points, notes = score(run.diagnosis, truth)
-    return run, points, notes
+    result = score_diagnosis(run.diagnosis, truth)
+    return run, result.total, result.notes
 
 
 async def main() -> int:
