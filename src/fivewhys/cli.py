@@ -25,6 +25,7 @@ from fivewhys.scenario import DEFAULT_SCENARIO_ROOT, build_scenario
 from fivewhys.snapshot import (
     DEFAULT_SNAPSHOT_PATH,
     Snapshot,
+    UnsafeOutputRootError,
     load_snapshot,
     save_snapshot,
     take_snapshot,
@@ -267,6 +268,11 @@ def snapshot_cmd(
         "--check",
         help="只校验：用当前代码重造场景，和已有快照比对（不写任何文件）",
     ),
+    keep_stale: bool = typer.Option(
+        False,
+        "--keep-stale",
+        help="不清理输出目录里陈旧的场景包（默认会清 —— 见 --help 的说明）",
+    ),
 ) -> None:
     """给评测集拍快照，或校验它没被改过（需求 FR-4 / NFR-1）。
 
@@ -286,7 +292,15 @@ def snapshot_cmd(
         _print_problems("有场景不可用，先修掉再拍快照：", problems)
         raise typer.Exit(code=1)
 
-    snapshot, stale = take_snapshot(out, seed=seed)
+    try:
+        snapshot, stale = take_snapshot(out, seed=seed, clean_stale=not keep_stale)
+    except UnsafeOutputRootError as exc:
+        # 这是**故意**的拒绝，不是崩溃：清理是全项目唯一会删东西的地方，
+        # 宁可不干活，也不要在一个看起来像源码目录的地方乱删。
+        console.print(f"[red]拒绝清理[/red] {exc}")
+        console.print("[dim]场景包没有生成。换个 --out，或者加 --keep-stale 跳过清理。[/dim]")
+        raise typer.Exit(code=1) from exc
+
     target = save_snapshot(snapshot, manifest)
 
     console.print(f"[bold]{snapshot.summary()}[/bold]")
