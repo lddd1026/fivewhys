@@ -88,8 +88,23 @@ $Spec = if ($NoDev) { '.' } else { '.[dev]' }
 Write-Host "`n安装 $Spec ..." -ForegroundColor Yellow
 & $VenvPy -m pip install -e $Spec
 
+# 上线前审查 PRE-8：镜像偶尔会对**构建依赖**（hatchling）返回 403 Forbidden
+# —— 那时 `pip install -e .` 直接失败，而报错是一大段 pip 内部输出，
+# 用户看不出「换个源就好」。实测这条失败会在陌生人敲下的**第一条命令**上发生。
+#
+# 所以这里自动换官方源重试一次：第一次命令必须能跑通，
+# 否则「克隆下来 5 分钟看到结果」就是句空话。
+if ($LASTEXITCODE -ne 0 -and $IndexUrl -ne 'https://pypi.org/simple') {
+    Write-Host "`n镜像安装失败，自动改用官方源重试一次 ..." -ForegroundColor Yellow
+    & $VenvPy -m pip install -e $Spec --index-url https://pypi.org/simple
+}
+
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n安装失败（exit $LASTEXITCODE）" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "可以手动排查：" -ForegroundColor Yellow
+    Write-Host "  .\.venv\Scripts\python.exe -m pip install -e `"$Spec`" -v" -ForegroundColor Cyan
+    Write-Host "  # 或换源：pwsh -File scripts/setup.ps1 -IndexUrl https://pypi.org/simple" -ForegroundColor Cyan
     exit $LASTEXITCODE
 }
 

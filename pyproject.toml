@@ -56,6 +56,9 @@ dev = [
 fivewhys = "fivewhys.cli:app"
 
 [project.urls]
+# ⚠️ 发布前必须填成真实地址（上线前审查 PRE-5）：
+# 一个公开仓库的 Homepage 指着 YOUR_GITHUB 比留空更糟 —— 点进去是 404。
+# 留成这个形状是有意的：`python -m pip show fivewhys` 里能一眼看出来还没填。
 Homepage = "https://github.com/YOUR_GITHUB/fivewhys"
 Issues = "https://github.com/YOUR_GITHUB/fivewhys/issues"
 
