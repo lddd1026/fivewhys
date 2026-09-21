@@ -228,9 +228,42 @@ async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
     return run, result.total, result.notes
 
 
+def judge(passed: int, attempted: int, planned: int) -> tuple[bool, str]:
+    """验收判定 —— 抽成纯函数，因为它决定「这个数字能不能写进 README」。
+
+    Args:
+        passed: 得分 ≥ 判定线的轮次。
+        attempted: 实际跑完的轮次。
+        planned: 原计划跑几轮。
+
+    Returns:
+        ``(是否通过, 一句话说明)``
+
+    两条规矩：
+
+    1. 通过线是「至少 60%」—— 对应 M1 的「跑 5 次至少 3 次对」。
+    2. **没跑满就不算通过**。预算中止、中途出错都算没跑满 ——
+       拿 2 次的数据说「5 次验收通过」就是编数字。
+    """
+    if attempted == 0:
+        return False, "一次都没跑 —— 预算太低或参数有误。"
+    if attempted < planned:
+        return False, f"未跑满全部轮次（{attempted}/{planned}），不构成验收结论。"
+    rate = passed / attempted
+    if rate >= 0.6:
+        return True, "M1 验收通过：agent 能自己查出根因。"
+    return False, "M1 验收未通过：还需要调优。"
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="FIV-5 端到端验证")
     parser.add_argument("--runs", type=int, default=5, help="跑几次（默认 5）")
+    parser.add_argument(
+        "--max-total-usd",
+        type=float,
+        default=0.50,
+        help="所有轮次加起来的成本上限（美元）。超过就停，默认 0.50",
+    )
     parser.add_argument("--trace", action="store_true", help="打印工具调用轨迹")
     parser.add_argument("--offline", action="store_true", help="不调 LLM，只展示场景")
     parser.add_argument("-v", "--verbose", action="store_true", help="打印调试日志（含堆栈）")
@@ -267,9 +300,22 @@ async def main() -> int:
 
     passed = 0
     total_cost = 0.0
+    attempted = 0
 
     for index in range(args.runs):
+        # ---- 总预算闸门（上线前审查 PRE-7）----
+        # 单次诊断有 $0.10 硬上限，但 `--runs 100` 这种**多轮**调用原先没有任何全局保险丝。
+        # 保险丝要装在「知道还要跑几次」的地方 —— 也就是这里，而不是单次诊断里。
+        if total_cost >= args.max_total_usd:
+            console.print(
+                f"[yellow]达到总预算 ${args.max_total_usd:.4f}（已花 ${total_cost:.4f}），"
+                f"停止剩余 {args.runs - index} 次。[/yellow]"
+            )
+            console.print("[dim]要跑完就调大 --max-total-usd；先确认花的钱是你能接受的。[/dim]")
+            break
+
         run, points, notes = await run_one(index, args.trace)
+        attempted += 1
         ok = points >= PASS_THRESHOLD
         passed += int(ok)
         total_cost += run.total_cost_usd
@@ -287,16 +333,21 @@ async def main() -> int:
     console.print(table)
     console.print()
 
-    rate = passed / args.runs
-    verdict = rate >= 0.6  # M1 验收：跑 5 次至少 3 次对
+    if attempted == 0:
+        console.print("[red]一次都没跑 —— 预算太低或参数有误。[/red]")
+        return 1
+
+    incomplete = attempted < args.runs
+    verdict, verdict_text = judge(passed, attempted, args.runs)
     console.print(
-        f"  通过 [bold]{passed}/{args.runs}[/bold]  "
-        f"（判定线 {PASS_THRESHOLD:.0%}）  总成本 ${total_cost:.4f}"
+        f"  通过 [bold]{passed}/{attempted}[/bold]"
+        + (f"（计划 {args.runs} 次，预算中止）" if incomplete else "")
+        + f"  （判定线 {PASS_THRESHOLD:.0%}）  总成本 ${total_cost:.4f}"
     )
     console.print(
-        "[green]M1 验收通过：agent 能自己查出根因。[/green]"
+        f"[green]{verdict_text}[/green]"
         if verdict
-        else "[red]M1 验收未通过：还需要调优。[/red]"
+        else f"[{'yellow' if incomplete else 'red'}]{verdict_text}[/]"
     )
     return 0 if verdict else 1
 
