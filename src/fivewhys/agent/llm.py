@@ -97,6 +97,7 @@ class LiteLLMClient:
         temperature: float = 0.0,
         api_base: str | None = None,
         timeout_s: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         # 离线价格表的开关在**模块级**设置 —— 见文件顶部。放在这里会太晚。
         import litellm
@@ -113,6 +114,10 @@ class LiteLLMClient:
         # 为什么必须显式给：litellm 默认 600 秒/次，× max_steps(20) = 最多 3 小时。
         # provider 挂死时命令行会一直僵着 —— 这是**有界性**问题，不是性能问题。
         self.timeout_s = timeout_s
+        # 这是我们唯一能主动设的成本上限。不发它，输出长度完全由 provider 决定：
+        # 实测一个 8MB 回复记了 $0.84，是单次硬上限（$0.10）的 8 倍
+        # —— 而成本闸门是在调用**之后**才检查的，拦不住这一刀。
+        self.max_output_tokens = max_output_tokens
 
     async def complete(
         self,
@@ -129,6 +134,8 @@ class LiteLLMClient:
             kwargs["api_base"] = self.api_base
         if self.timeout_s is not None:
             kwargs["timeout"] = self.timeout_s
+        if self.max_output_tokens is not None:
+            kwargs["max_tokens"] = self.max_output_tokens
         # 没有工具时不要传 tools=[]，部分 provider 会报错
         if tools:
             kwargs["tools"] = list(tools)
@@ -137,6 +144,7 @@ class LiteLLMClient:
         response = await self._litellm.acompletion(**kwargs)
         message = response.choices[0].message
 
+        content = getattr(message, "content", None)
         calls = tuple(
             ToolCall(
                 id=call.id or f"call_{index}",
@@ -146,14 +154,48 @@ class LiteLLMClient:
             for index, call in enumerate(getattr(message, "tool_calls", None) or [])
         )
 
+        _assert_response_is_sane(content=content, calls=calls)
+
         usage = getattr(response, "usage", None)
         return LLMResponse(
-            content=getattr(message, "content", None),
+            content=content,
             tool_calls=calls,
             prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             cost_usd=_estimate_cost(self._litellm, response),
             raw=response,
+        )
+
+
+class OversizedResponseError(RuntimeError):
+    """一次回复大得不正常 —— 拒绝把它带进上下文。
+
+    为什么宁可报错也不截断：这个回复会被**原样加进对话历史**，下一次请求
+    再把它整个发回去。一份 8MB 的回复会让后续每一次调用的输入都多 8MB，
+    成本是**平方级**增长的。
+
+    上线前实测：8MB 回复让单次调用记账 **$0.84**，是单次硬上限（$0.10）的 8 倍，
+    而成本闸门是在调用之后才检查的 —— 拦不住。报错会变成一次 `error` 记录
+    （需求 §6.2 里这类不计入准确率分母），代价可控。
+    """
+
+
+# 一次回复的字符上限。正常的诊断结论是**千字级**（9 个字段 + 5 层追问），
+# 100k 字符已经是它的 100 倍 —— 越过这条线必然是异常，不是模型话多。
+MAX_RESPONSE_CHARS_ALLOWED = 100_000
+
+
+def _assert_response_is_sane(*, content: str | None, calls: tuple[ToolCall, ...]) -> None:
+    """回复大小不合常理时，早点报错。
+
+    为什么要自己兜一道：``max_tokens`` 是**请求侧**的请求，provider 可以不理它
+    （自建端点、代理、兼容层都可能）。这是**响应侧**的兜底。
+    """
+    total = len(content or "") + sum(len(call.arguments) for call in calls)
+    if total > MAX_RESPONSE_CHARS_ALLOWED:
+        raise OversizedResponseError(
+            f"模型这一次回复了 {total:,} 字符（上限 {MAX_RESPONSE_CHARS_ALLOWED:,}）—— "
+            "拒绝继续，避免把它带进后续每一次请求"
         )
 
 
@@ -190,4 +232,12 @@ def _estimate_cost(litellm_module: Any, response: Any) -> float:
         return 0.0
 
 
-__all__ = ["LLMClient", "LLMResponse", "LiteLLMClient", "Message", "ToolCall"]
+__all__ = [
+    "MAX_RESPONSE_CHARS_ALLOWED",
+    "LLMClient",
+    "LLMResponse",
+    "LiteLLMClient",
+    "Message",
+    "OversizedResponseError",
+    "ToolCall",
+]
