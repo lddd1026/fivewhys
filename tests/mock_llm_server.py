@@ -76,28 +76,45 @@ def _called_tools(messages: Messages) -> list[str]:
 
 
 def ideal_responder(messages: Messages) -> dict[str, Any]:
-    """一个「完美模型」：先查日志，再提交正确结论。
+    """一个「完美模型」：**按真实排障路径走一遍 5 个工具**，再提交正确结论。
+
+    它走过的是：
+
+    ::
+
+        query_metrics    错误率从 14:02 起飙升（拿到时间点）
+          -> query_logs    deadline exceeded + connection wait time 飙升
+            -> get_config  db.pool_size: 50 -> 5      <- 根因
+              -> get_deploy_history  窗口内没有发布（排除嫌疑）
+                -> submit_diagnosis
+
+    为什么脚本要绕这么一圈，而不是直接提交答案：这样端到端测试才真的
+    穿过**主循环的工具分发 + 完整的证据链**。以前它只调 query_logs，
+    另外四个工具在端到端里从来没被调用过 —— 链路上任何一处坏了都测不出来。
 
     只针对 ``db_pool_exhausted`` 这一个场景 —— 这就是个脚本，不做推理。
     """
     called = _called_tools(messages)
+    service = "order-service"
+    # 时间窗口故意开得很宽，覆盖整个场景
+    window = {"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z"}
+
+    if "query_metrics" not in called:
+        return _tool_call("query_metrics", {"service": service, **window}, "call_metrics")
 
     if "query_logs" not in called:
-        return _tool_call(
-            "query_logs",
-            # 时间窗口故意开得很宽，覆盖整个场景
-            {
-                "service": "order-service",
-                "start": "2026-01-01T00:00:00Z",
-                "end": "2026-01-02T00:00:00Z",
-            },
-            "call_query",
-        )
+        return _tool_call("query_logs", {"service": service, **window}, "call_logs")
+
+    if "get_config" not in called:
+        return _tool_call("get_config", {"service": service}, "call_config")
+
+    if "get_deploy_history" not in called:
+        return _tool_call("get_deploy_history", {"service": service, **window}, "call_deploys")
 
     return _tool_call(
         "submit_diagnosis",
         {
-            "root_cause": "order-service 的数据库连接池上限被配置变更下调，导致连接耗尽",
+            "root_cause": "order-service 的数据库连接池上限被配置变更下调（50 -> 5），导致连接耗尽",
             "root_cause_service": "order-service",
             "fault_category": "db_pool_exhausted",
             "confidence": "high",
@@ -105,26 +122,53 @@ def ideal_responder(messages: Messages) -> dict[str, Any]:
                 {
                     "depth": 1,
                     "question": "为什么错误率飙升？",
-                    "answer": "order lookup 大量 context deadline exceeded",
-                    "evidence": [],
+                    "answer": "order lookup 大量 context deadline exceeded，P95 冲到 3s",
+                    "evidence": [
+                        {
+                            "source": "query_metrics(order-service)",
+                            "finding": "错误率从 14:02 起从 0% 升到 13%，P95 从 102ms 升到 3055ms",
+                            "supports": True,
+                        }
+                    ],
                 },
                 {
                     "depth": 2,
                     "question": "为什么请求会超时？",
                     "answer": "请求在等待数据库连接，connection wait time 涨到 3000ms",
-                    "evidence": [],
+                    "evidence": [
+                        {
+                            "source": "query_logs(order-service)",
+                            "finding": "connection wait time 3023ms exceeds threshold 100ms",
+                            "supports": True,
+                        }
+                    ],
+                },
+                {
+                    "depth": 3,
+                    "question": "为什么连接要排队等？",
+                    "answer": "连接池上限被从 50 改成了 5，并发请求只能排队",
+                    "evidence": [
+                        {
+                            "source": "get_config(order-service)",
+                            "finding": "14:01:58 db.pool_size: 50 -> 5",
+                            "supports": True,
+                        }
+                    ],
                 },
             ],
             "evidence": [
                 {
-                    "source": "query_logs(order-service)",
-                    "finding": "connection wait time 从 0ms 飙升到约 3000ms",
+                    "source": "get_config(order-service)",
+                    "finding": "配置变更 db.pool_size: 50 -> 5 发生在错误开始前 2 秒",
                     "supports": True,
                 }
             ],
-            "ruled_out": ["下游服务在该时间窗口内没有异常日志"],
-            "suggested_fix": "回滚配置变更，恢复连接池上限",
-            "summary": "连接池耗尽导致 order-service 大面积超时",
+            "ruled_out": [
+                "发布引起的：get_deploy_history 显示故障窗口内没有发布",
+                "下游服务：它们在同一时间窗口内没有异常",
+            ],
+            "suggested_fix": "回滚配置变更，恢复连接池上限到 50",
+            "summary": "连接池上限被改成 5 导致连接耗尽，order-service 大面积超时",
         },
         "call_submit",
     )

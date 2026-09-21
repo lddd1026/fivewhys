@@ -102,6 +102,38 @@ def test_demo_offline_mode_needs_no_key_and_no_network() -> None:
     assert "关键线索已出现" in result.stdout
 
 
+def test_demo_offline_shows_the_whole_scenario_and_where_the_answer_is() -> None:
+    """离线的输出要能让人一眼看懂这个场景考什么、答案藏在哪。
+
+    断言故障类别里那对方括号 —— Rich 会把 ``[db_pool_exhausted]`` 当成标记
+    （markup）整个吞掉，屏幕上只剩一个服务名，类别凭空消失。
+    这个 bug 就是跑 ``--offline`` 看输出时发现的。
+    """
+    result = _run_demo(None, "--offline", with_key=False)
+
+    assert "db_pool_exhausted" in result.stdout, "故障类别被 Rich 的标记吞了"
+    assert "db.pool_size: 50 -> 5" in result.stdout, "没把「答案在配置里」展示出来"
+    for tool in ("query_metrics", "query_logs", "get_config"):
+        assert tool in result.stdout, f"没告诉人 {tool} 可用"
+
+
+def test_demo_walks_the_whole_evidence_chain_through_the_loop() -> None:
+    """端到端跑的是**完整证据链**，不只是查一次日志。
+
+    假模型会依次调用指标 / 日志 / 配置 / 发布，再提交结论。
+    断言每一步都真的被主循环分发过 —— 工具 schema、参数校验、工具分发，
+    链路上任何一处坏了都会在这里露出来。
+    """
+    with fake_llm_server() as base_url:
+        result = _run_demo(base_url, "--runs", "1", "--trace")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    for tool in ("query_metrics", "query_logs", "get_config", "get_deploy_history"):
+        assert tool in result.stdout, f"{tool} 没有被调用"
+    assert "submitted" in result.stdout
+    assert "M1 验收通过" in result.stdout
+
+
 def test_demo_fails_cleanly_without_api_key() -> None:
     """缺 key 时要给出能照着做的提示，而不是抛一堆栈。"""
     result = _run_demo(None, "--runs", "1", with_key=False)
