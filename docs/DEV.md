@@ -96,6 +96,17 @@ demo_m1.py 子进程 -> get_settings -> LiteLLMClient -> litellm 发真实 HTTP
 
 `pytest tests/test_e2e_demo.py` 就是在跑这个。
 
+### 假模型会走**完整证据链**
+
+`ideal_responder` 不是查一次日志就交答案 —— 它依次调用
+`query_metrics` → `query_logs` → `get_config` → `get_deploy_history` 再提交结论。
+所以这条端到端测试真的穿过了主循环的工具分发：工具 schema、参数校验、
+分发逻辑任何一处坏了都会红。
+
+而 `scripts/demo_m1.py` 用的场景就是**评测集里的那个场景**
+（`fivewhys.scenario.build_scenario`，三个服务、五类数据齐备）——
+不是另造的一个简化版。
+
 手动体验：
 
 ```powershell

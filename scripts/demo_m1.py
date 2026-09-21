@@ -13,6 +13,15 @@
 前置：``.env`` 里配好 ``DEEPSEEK_API_KEY``
 
 **这是唯一需要联网和花钱的一步。** 其余测试全部离线可跑。
+
+## 用的就是评测集里的那个场景
+
+场景由 :func:`fivewhys.scenario.build_scenario` 构造 —— 和
+``fivewhys snapshot`` / M6 评测台用的是**同一个构造器、同一份数据形状**：
+三类服务、日志 / 指标 / 配置 / 发布 / 拓扑五类数据齐备，5 个工具都有真实数据。
+
+（FIV-13 之前这里只喂了日志，另外四个工具拿到的是空数据 ——
+那样跑出来的「通过 3/5」证明不了 agent 会在真实排障路径上工作。）
 """
 
 from __future__ import annotations
@@ -21,28 +30,27 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 # 让脚本能直接运行（不必先 pip install -e .）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rich.console import Console  # noqa: E402
+from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 from fivewhys.agent import diagnose  # noqa: E402
 from fivewhys.config import get_settings  # noqa: E402
-from fivewhys.mock.logstore import LogStore  # noqa: E402
-from fivewhys.mock.scenarios import inject_db_pool_exhausted  # noqa: E402
-from fivewhys.mock.service import MockService  # noqa: E402
-from fivewhys.models import AgentRun, GroundTruth  # noqa: E402
+from fivewhys.models import AgentRun, FaultCategory  # noqa: E402
+from fivewhys.scenario import Scenario  # noqa: E402
+from fivewhys.scenario import build_scenario as build_full_scenario  # noqa: E402
 from fivewhys.scoring import PASS_THRESHOLD, score_diagnosis  # noqa: E402
 from fivewhys.tools import DataSource, build_registry  # noqa: E402
 
 console = Console()
 
 T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
-FAULT_AT = T0 + timedelta(minutes=30)
 
 API_KEY_BY_PROVIDER = {
     "deepseek": "DEEPSEEK_API_KEY",
@@ -58,16 +66,9 @@ API_KEY_BY_PROVIDER = {
 # --------------------------------------------------------------------------
 
 
-def build_scenario(seed: int) -> tuple[LogStore, GroundTruth, str]:
-    """造一个「正常 30 分钟 + 故障 5 分钟」的场景。"""
-    store = LogStore()
-    service = MockService("order-service", store, seed=seed)
-    service.normal_operation(T0, FAULT_AT)
-    truth = inject_db_pool_exhausted(store, service, FAULT_AT)
-
-    # 需求 FR-15：只给服务名 + 粗略时间 + 表面症状，不给根因
-    question = f"order-service 从 {FAULT_AT:%H:%M} 前后开始错误率飙升，帮忙定位一下原因"
-    return store, truth, question
+def make_scenario(seed: int) -> Scenario:
+    """造一个「连接池耗尽」场景 —— 和评测集用的是同一个构造器。"""
+    return build_full_scenario(FaultCategory.DB_POOL_EXHAUSTED, seed=seed, base_time=T0)
 
 
 # --------------------------------------------------------------------------
@@ -84,18 +85,41 @@ def build_scenario(seed: int) -> tuple[LogStore, GroundTruth, str]:
 # --------------------------------------------------------------------------
 
 
-def show_offline(store: LogStore, truth: GroundTruth, question: str) -> None:
-    """不调 LLM，只展示场景本身 —— 对应需求 FR-14a 的离线可看性。"""
+def show_offline(scenario: Scenario) -> None:
+    """不调 LLM，只展示场景本身 —— 对应需求 FR-14a 的离线可看性。
+
+    ⚠️ 这里**故意把答案也打出来**。它不进 agent 的上下文（agent 只拿到
+    ``scenario.question``），是给**你**看的：一眼就能确认这个场景该考什么、
+    线索够不够、答案藏在哪。
+    """
+    truth = scenario.ground_truth
+    registry = build_registry(DataSource.from_scenario(scenario))
 
     console.print("[bold]场景概览[/bold]（不调用任何 LLM）\n")
-    console.print(f"  问题      : {question}")
-    console.print(f"  日志总量  : {len(store)} 条  {store.stats()}")
-    console.print(f"  标准答案  : [{truth.fault_category}] {truth.root_cause_service}")
+    console.print(f"  问题      : {scenario.question}")
+    # ⚠️ 不要写 f"[{category}]" —— Rich 会把方括号当成标记（markup）吞掉，
+    # 屏幕上只剩一个服务名，类别凭空消失。这个 bug 是跑 --offline 看输出时发现的。
+    console.print(
+        f"  标准答案  : [bold]{truth.fault_category.value}[/bold] @ {truth.root_cause_service}"
+    )
+    console.print(f"  根因描述  : {truth.root_cause}")
+    console.print()
+    console.print(f"  日志      : {len(scenario.logs)} 条  {scenario.logs.stats()}")
+    console.print(f"  指标采样  : {len(scenario.metrics)} 条")
+    console.print(f"  配置快照  : {len(scenario.configs)} 条")
+    console.print(f"  发布记录  : {len(scenario.deploys)} 条")
+    for name, calls in scenario.topology.items():
+        console.print(f"  拓扑      : {name} -> {'、'.join(calls) if calls else '（无下游）'}")
+    console.print(f"  可用工具  : {' / '.join(registry.names())}")
     console.print(f"  判分关键词: {', '.join(truth.match_keywords)}\n")
 
-    console.print("[bold]故障期间的日志（前 12 条）[/bold]")
-    fault_lines = [e for e in store.all() if e.ts >= truth.injected_at]
-    for entry in fault_lines[:12]:
+    # 只看异常日志 —— 故障窗口里的正常流量占绝大多数（一次请求 10 行跨服务日志），
+    # 不过滤的话前 12 条全是 INFO，"症状"一条也看不见。
+    fault_lines = [e for e in scenario.logs.all() if e.ts >= truth.injected_at]
+    abnormal = [e for e in fault_lines if e.level.value in {"WARN", "ERROR"}]
+
+    console.print("[bold]故障期间的异常日志（前 12 条）[/bold]")
+    for entry in abnormal[:12]:
         style = {"ERROR": "red", "WARN": "yellow"}.get(entry.level.value, "dim")
         trace = f"  trace={entry.trace_id}" if entry.trace_id else ""
         console.print(
@@ -103,6 +127,10 @@ def show_offline(store: LogStore, truth: GroundTruth, question: str) -> None:
             f" {entry.message}{trace}",
             soft_wrap=True,
         )
+    console.print(
+        f"  [dim]（另有 {len(fault_lines) - len(abnormal)} 条正常请求日志："
+        "同一次请求的日志散落在三个服务里，靠 trace_id 串起来）[/dim]"
+    )
 
     text = " ".join(e.message.lower() for e in fault_lines)
     leaked = [kw for kw in truth.answer_keywords if kw.lower() in text]
@@ -118,9 +146,23 @@ def show_offline(store: LogStore, truth: GroundTruth, question: str) -> None:
         if "connection wait time" in text
         else "  [red]✗ 关键线索缺失 —— agent 将无从推理[/red]"
     )
+
+    # ---- 答案藏在哪：配置里 ----
+    changes = scenario.configs.changes(truth.root_cause_service)
+    if changes:
+        lines = "\n".join(f"    {c.ts:%H:%M:%S}  {c.key}: {c.old} -> {c.new}" for c in changes)
+        console.print()
+        console.print(
+            Panel(
+                lines,
+                title=f"答案在配置里（{truth.root_cause_service}），不在日志里",
+                title_align="left",
+            )
+        )
     console.print()
     console.print(f"  [dim]答案词（不许出现在日志）: {', '.join(truth.answer_keywords)}[/dim]")
-    console.print(f"  [dim]判分词（给 agent 答案打分）: {', '.join(truth.match_keywords)}[/dim]")
+    console.print(f"  [dim]判分词（给 agent 的答案打分）: {', '.join(truth.match_keywords)}[/dim]")
+    console.print("\n  [dim]想看 agent 具体会读到什么：python scripts/inspect_scenario.py[/dim]")
 
 
 def show_trace(run: AgentRun) -> None:
@@ -128,7 +170,7 @@ def show_trace(run: AgentRun) -> None:
     for record in run.tool_calls:
         mark = "[green]OK  [/green]" if record.ok else "[red]FAIL[/red]"
         detail = (record.result_summary or record.error or "").splitlines()[0][:70]
-        console.print(f"    step{record.step} {mark} {record.tool:<12} {detail}")
+        console.print(f"    step{record.step} {mark} {record.tool:<18} {detail}")
 
 
 # --------------------------------------------------------------------------
@@ -137,11 +179,11 @@ def show_trace(run: AgentRun) -> None:
 
 
 async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
-    store, truth, question = build_scenario(seed)
+    scenario = make_scenario(seed)
     run = await diagnose(
-        scenario_id=truth.scenario_id,
-        question=question,
-        registry=build_registry(DataSource.logs_only(store)),
+        scenario_id=scenario.scenario_id,
+        question=scenario.question,
+        registry=build_registry(DataSource.from_scenario(scenario)),
         settings=get_settings(),
     )
 
@@ -155,7 +197,7 @@ async def run_one(seed: int, trace: bool) -> tuple[AgentRun, float, list[str]]:
     if run.diagnosis is None:
         return run, 0.0, [f"未提交结论（{run.stop_reason}）"]
 
-    result = score_diagnosis(run.diagnosis, truth)
+    result = score_diagnosis(run.diagnosis, scenario.ground_truth)
     return run, result.total, result.notes
 
 
@@ -169,8 +211,7 @@ async def main() -> int:
     settings = get_settings()
 
     if args.offline:
-        store, truth, question = build_scenario(0)
-        show_offline(store, truth, question)
+        show_offline(make_scenario(0))
         return 0
 
     provider = settings.llm_model.split("/", 1)[0]
