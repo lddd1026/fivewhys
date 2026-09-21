@@ -13,28 +13,7 @@
 
 ## 进行中
 
-- [~] **FIV-5** 端到端验证 M1 · `P0` · 约 2h
-  - 提交：`af58794 feat(demo): M1 端到端跑真实场景 + 走完整证据链`
-  - 涉及：`scripts/demo_m1.py`、`tests/mock_llm_server.py`、`tests/test_e2e_demo.py`
-  - ✅ 验证脚本已就绪（含 `--offline`、`--trace`、判分、判定输出）
-  - ✅ **demo 现在跑的就是评测集里的那个场景**：3 个服务 + 五类数据齐备，
-    5 个工具都有真实数据。此前只喂日志，另外四个工具拿到的是空数据 ——
-    那样跑出来的「通过 3/5」证明不了 agent 会在真实排障路径上工作
-  - ✅ **假 LLM 的端到端测试会走完整证据链**：指标 → 日志 → 配置 → 发布 → 提交，
-    每一步都真的经过主循环的工具分发（真实 HTTP + 真实 litellm + 真实子进程，
-    只把「模型智力」换成脚本）
-  - ⬜ **真实运行待做**：验收标准是「跑 5 次至少 3 次正确」，
-    这一步需要真实模型，`.env` 里要有 `DEEPSEEK_API_KEY`
-  - 阻塞原因：外部依赖（用户的 API Key），非代码问题
-  - **怎么做**（拿到 key 之后）：
-
-    ```powershell
-    Copy-Item .env.example .env      # 填上 DEEPSEEK_API_KEY=sk-...
-    .\.venv\Scripts\python.exe scripts/demo_m1.py --runs 5 --trace
-    ```
-
-    判定线：5 次里至少 3 次得分 ≥ 80%（需求 §10.1）。命令自己会打判定，
-    退出码 0 = 通过。跑完把那张表贴进本文件和 README
+（空。M1 已完成，下一个任务：**FIV-16** litellm 多模型接入，见 M5。）
 
 ---
 
@@ -172,6 +151,61 @@
 ---
 
 ## 已完成
+
+- [x] **FIV-5** 端到端验证 M1 · ✅ **验收通过**（2026-09-10）
+  - 涉及：`scripts/demo_m1.py`、`tests/mock_llm_server.py`、`tests/test_e2e_demo.py`
+  - **真实模型跑 5 次，5 次全对（100%）** —— 判定线是「至少 3 次」
+
+    ```
+    模型 = deepseek/deepseek-chat（DeepSeek 端实际返回 deepseek-flash）
+    命令 = .\.venv\Scripts\python.exe scripts/demo_m1.py --runs 5
+
+    ┌──────┬──────┬───────────┬──────┬─────────┬───────┬──────────┐
+    │ 轮次 │ 得分 │ 停止原因  │ 调用 │    成本 │  耗时 │ 备注     │
+    ├──────┼──────┼───────────┼──────┼─────────┼───────┼──────────┤
+    │    1 │ 100% │ submitted │    8 │ $0.0031 │ 14.0s │ 完全正确 │
+    │    2 │ 100% │ submitted │    8 │ $0.0030 │ 12.0s │ 完全正确 │
+    │    3 │ 100% │ submitted │    8 │ $0.0032 │ 14.1s │ 完全正确 │
+    │    4 │ 100% │ submitted │    8 │ $0.0032 │ 13.6s │ 完全正确 │
+    │    5 │ 100% │ submitted │    8 │ $0.0032 │ 15.2s │ 完全正确 │
+    └──────┴──────┴───────────┴──────┴─────────┴───────┴──────────┘
+
+    通过 5/5（判定线 80%）  总成本 $0.0156
+    ```
+
+  - **成本对照 NFR-2**：单次 $0.0031（硬上限 $0.10 ✅、平均目标 $0.03 ✅，
+    只有目标的十分之一）；按此推算 100 次全量评测约 $0.31（预算 $5 ✅）
+  - **推理路径**（`--trace` 实测，5 轮几乎一致，8 次调用）：
+    `query_metrics`（拿到 14:02 这个时间点）→ `get_dependencies`（确认下游是谁）
+    → `query_logs`（31 条症状）→ `query_metrics`（下游服务，**排除**它们）
+    → `get_config`（**找到 `db.pool_size: 50 -> 5`**）→ `get_deploy_history`（排除发布）
+    → `query_logs`（再确认）→ 提交
+    > 它是**自己走到配置那一步**的 —— 这正是这个场景要考的能力。
+  - ⚠️ 两处可以再优化（M7 的素材，先记下来）：
+    1. 5 轮都出现了**同参数重复调用** `query_metrics`（系统提示词明明说了
+       「不要用同样的参数重复调用同一个工具」）—— 8 次调用里至少 1 次是浪费
+    2. 成本算不出来这件事（FIV-D3）让第一版验收表格显示 $0.0000，
+       差一点就把一个假数字写进 README
+
+- [x] **FIV-D3** 成本统计恒为 0 · ✅ 已完成
+  - 提交：`3a0c5c1 fix(llm): 成本统计不再恒为 0 —— 一个要进 README 的指标曾经是假的`
+  - **只有拿真实 key 跑才会暴露**：假 LLM 服务返回的 usage 同样算不出成本，
+    394 个离线测试全绿
+  - 根因：`litellm.completion_cost()` 拿**响应里回的 model 名**查价格表，
+    而 provider 回的名字未必等于请求的别名（实测请求 `deepseek/deepseek-chat`，
+    回的是 `deepseek-flash`）→ 查表失败抛异常 → 被 `except` 吞掉 → 恒记 0
+  - 修法：先读 litellm 已经算好的 `response._hidden_params["response_cost"]`，
+    读不到再退回 `completion_cost`，最后才是 0
+
+- [x] **FIV-D2** `.env` 里的 provider key 根本没进进程环境 · ✅ 已完成
+  - 提交：`ffcbfeb fix(config): .env 里的 provider key 现在真的会进进程环境`
+  - **发现方式**：第一次拿真实 key 跑 demo —— `doctor` 显示「未设置
+    DEEPSEEK_API_KEY」，而 `.env` 明明就在那儿
+  - 根因：`SettingsConfigDict(env_file=".env")` 只服务它自己的字段
+    （`FIVEWHYS_*`）。`DEEPSEEK_API_KEY` 是 **litellm 从 `os.environ` 读的**，
+    而全项目没有任何地方调 `load_dotenv()` —— `python-dotenv` 自 M0 起
+    就写在依赖里，却从来没被 import 过
+  - 后果：README 那句「`cp .env.example .env` 然后填上 key」**是条死路**
 
 - [x] **FIV-14** 工具描述打磨（M4） · 已完成
   - 提交：`28c7c35 chore(tools): 工具描述打磨 —— 位置 / 局限 / 典型调用 + 总量预算`

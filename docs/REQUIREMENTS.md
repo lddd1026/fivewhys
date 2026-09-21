@@ -515,7 +515,7 @@ baseline               58%
 | FR-14b | P1 | M8 | FIV-29, FIV-30 | ⬜ |
 | FR-15 | P0 | M2 / M3 | **FIV-9** ✅, **FIV-12** ✅ | 🟡 |
 | NFR-1 | P0 | M1 | **FIV-1** ✅ | ✅ |
-| NFR-2 | P1 | M6 | FIV-21 | ⬜ |
+| NFR-2 | P1 | M6 | FIV-21, **FIV-D3** ✅ | 🟡 |
 | NFR-3 | P2 | M6 | FIV-21 | ⬜ |
 | NFR-4 / NFR-5 | P0 | 持续 | `scripts/check.ps1` | ✅ |
 | NFR-6 ~ NFR-10 | P0 | M0 | `pyproject.toml`, `scripts/setup.ps1`, docs | ✅ |
@@ -556,7 +556,37 @@ FR-6、FR-15（简化版）。
 | 2026-09-10 | 修订：拆分关键词清单（FR-2 / FR-3） | **实现阶段发现的缺陷**，详见 §12.2 |
 | 2026-09-10 | 修订：补「场景快照」判据（FR-4） | **实现阶段发现的缺陷**，详见 §12.3 |
 | 2026-09-10 | 修订：故障期间的背景流量必须跨服务 | **实现阶段发现的缺陷**，详见 §12.4 |
+| 2026-09-10 | 修订：NFR-2 的成本必须真的算得出来 | **实现阶段发现的缺陷**，详见 §12.5 |
 
+### 12.5 NFR-2 的成本必须真的算得出来（FIV-D3 发现）
+
+第一次拿真实 key 跑完 M1 验收（5/5 全对），demo 表格里「总成本 $0.0000」——
+看起来像不要钱，实际是**根本没算**。
+
+**根因**：`litellm.completion_cost()` 拿**响应里回的 model 名**去查价格表，
+而 provider 回的名字未必等于请求的别名：实测请求 `deepseek/deepseek-chat` 时
+DeepSeek 回的是 `model='deepseek-flash'`，查表失败抛
+`This model isn't mapped yet`，被 `estimate_cost` 的 `except Exception` 吞掉，
+于是每一次调用都记 0。
+
+而 litellm **已经算好了**：`response._hidden_params["response_cost"]`。
+它用的是请求时的别名。现在先读它，读不到再退回 `completion_cost`，最后才是 0。
+
+**修法**：见上。另加三个测试，其中一个精确复现线上那次失败。
+
+> 为什么严重：NFR-2 的成本红线、「平均成本 $0.03」这个目标、
+> README 里那张表的每一行，全都依赖这个数字。
+> **一个假得很好看的数字（$0.0000）比一个明显缺失的数字更危险。**
+
+**同一轮还发现一个更基础的**：`cp .env.example .env` 那条路是死的 ——
+`SettingsConfigDict(env_file=".env")` 只服务 `FIVEWHYS_*` 自己的字段，
+而 `DEEPSEEK_API_KEY` 是 litellm 从 `os.environ` 读的，全项目没人调
+`load_dotenv()`（`python-dotenv` 自 M0 就写在依赖里，从没被 import 过）。
+key 被静默忽略，用户收到的是一句莫名其妙的鉴权失败。见看板 FIV-D2。
+
+> 这两个缺陷有同一个特征：**离线测试全绿，只有真按用户的步骤、拿真 key 跑一次
+> 才会暴露**（假 LLM 服务返回的 usage 同样算不出成本）。
+> 「离线能验证的」和「必须真跑一次的」之间的那道缝，就是它们藏身的地方。
 ### 12.4 背景流量必须跨服务（FIV-D1 发现）
 
 **问题**：注入故障时，背景「正常流量」只发给**被注入故障的那个服务**，
@@ -591,7 +621,6 @@ inventory-service  故障期 0 个指标桶
 > 它准确报出「5 个故障场景的 logs/metrics 变了，no_fault 没变」。
 
 ### 12.3 场景包的换行符与「自我验证」（FIV-12 发现）
-
 **问题一：跨平台不可复现。**
 
 `open("w")` 在 Windows 上默认把 `\n` 转成 CRLF。实测生成的 `logs.jsonl`
@@ -662,3 +691,4 @@ inventory-service  故障期 0 个指标桶
 
 **变更规则**：需求变更必须改本文档，并同步检查 ROADMAP 和 TASKS 是否需跟着改。
 不允许"代码改了但需求没改"。
+
