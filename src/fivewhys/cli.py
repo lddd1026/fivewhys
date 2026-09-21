@@ -152,7 +152,8 @@ def build_scenario_cmd(
     console.print(f"  [bold]根因服务[/bold] {scenario.ground_truth.root_cause_service}")
     console.print(f"  [bold]故障类别[/bold] {scenario.ground_truth.fault_category}")
     console.print(
-        f"  [bold]数据[/bold]     日志 {len(scenario.logs)} 条 / 指标 {len(scenario.metrics)} 条"
+        f"  [bold]数据[/bold]     日志 {len(scenario.logs)} 条 / 指标 {len(scenario.metrics)} 条 / "
+        f"配置快照 {len(scenario.configs)} 条 / 发布 {len(scenario.deploys)} 条"
     )
     console.print()
 

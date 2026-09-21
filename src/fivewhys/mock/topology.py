@@ -41,6 +41,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from fivewhys.mock.changes import ConfigStore, DeployStore
 from fivewhys.mock.logstore import LogStore
 from fivewhys.mock.metrics import MetricStore
 from fivewhys.mock.service import MockService
@@ -70,6 +71,28 @@ DEFAULT_TOPOLOGY: tuple[ServiceSpec, ...] = (
 )
 
 
+# 各服务的初始配置。
+#
+# ⚠️ 注意 order-service 的 db.pool_size 是 50 —— 故障注入会把它改成 5。
+# agent 要靠「配置变过」这条线索才能定位根因，而这条线索**不在日志里**：
+# 日志只说 "config reloaded"，不说改了什么。
+DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
+    "order-service": {
+        "db.pool_size": 50,
+        "db.timeout_ms": 3000,
+        "http.slo_ms": 500,
+    },
+    "payment-service": {
+        "http.timeout_ms": 2000,
+        "retry.max": 3,
+    },
+    "inventory-service": {
+        "db.pool_size": 20,
+        "cache.ttl_s": 60,
+    },
+}
+
+
 class MockSystem:
     """一组互相调用的服务，共享同一个日志仓库。
 
@@ -84,15 +107,25 @@ class MockSystem:
         specs: tuple[ServiceSpec, ...] = DEFAULT_TOPOLOGY,
         seed: int = 0,
         metrics: MetricStore | None = None,
+        configs: ConfigStore | None = None,
+        deploys: DeployStore | None = None,
+        configs_by_service: dict[str, dict[str, object]] | None = None,
     ) -> None:
         if not specs:
             raise ValueError("拓扑不能为空")
 
         self.store = store
         self.seed = seed
-        # 指标仓库。可以由外部传入 —— 一个场景的日志和指标必须装在同一个
-        # 场景包里（见 FIV-9），所以不能每次自己 new 一个。
+        # 这四个仓库都可以由外部传入 —— 一个场景的日志、指标、配置、发布
+        # 必须装在同一个场景包里（见 FIV-9），所以不能每次自己 new 一个。
         self.metrics = metrics if metrics is not None else MetricStore()
+        self.configs = configs if configs is not None else ConfigStore()
+        self.deploys = deploys if deploys is not None else DeployStore()
+        self._initial_configs = (
+            configs_by_service if configs_by_service is not None else DEFAULT_CONFIGS
+        )
+        self._bootstrapped = False
+
         self._specs: dict[str, ServiceSpec] = {spec.name: spec for spec in specs}
         self._rng = random.Random(seed)  # 系统级随机源：只用来生成 trace_id 和调度
 
@@ -108,6 +141,33 @@ class MockSystem:
         }
 
         self.entry = specs[0].name
+
+    # ---- 初始化 ----
+
+    def bootstrap(self, at: datetime) -> None:
+        """记录各服务的初始配置和一条基线发布记录。
+
+        **幂等**：重复调用没有副作用。第一次产生流量时自动触发 ——
+        因为一个系统在"有流量"的那一刻，必然已经有一份配置了。
+        """
+        if self._bootstrapped:
+            return
+        self._bootstrapped = True
+
+        for index, name in enumerate(self._specs):
+            self.configs.record_values(
+                at,
+                name,
+                dict(self._initial_configs.get(name, {})),
+                note="initial config",
+            )
+            self.deploys.add(
+                at,
+                name,
+                version=f"v1.{index}.0",
+                operator="platform-bot",
+                note="baseline deploy",
+            )
 
     # ---- 查询 ----
 
@@ -147,7 +207,12 @@ class MockSystem:
         entry: str | None = None,
         trace: str | None = None,
     ) -> datetime:
-        """生成一次完整请求的跨服务日志。返回这次请求结束的时间点。"""
+        """生成一次完整请求的跨服务日志。返回这次请求结束的时间点。
+
+        顺带做一次幂等的 :meth:`bootstrap` —— 系统一旦有流量，
+        就必然已经有一份配置和一次基线发布了。
+        """
+        self.bootstrap(at)
         return self._handle(
             entry or self.entry,
             at,
@@ -252,4 +317,4 @@ def _milliseconds_between(start: datetime, end: datetime) -> int:
     return int((end - start).total_seconds() * 1000)
 
 
-__all__ = ["DEFAULT_TOPOLOGY", "MockSystem", "ServiceSpec"]
+__all__ = ["DEFAULT_CONFIGS", "DEFAULT_TOPOLOGY", "MockSystem", "ServiceSpec"]

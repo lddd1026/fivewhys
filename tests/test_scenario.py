@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from fivewhys.mock import LogStore, MetricStore, MockService, RequestSample
+from fivewhys.mock import ConfigStore, LogStore, MetricStore, MockService, RequestSample
 from fivewhys.mock.scenarios import inject_db_pool_exhausted
 from fivewhys.models import FaultCategory, GroundTruth, LogLevel
 from fivewhys.scenario import (
@@ -149,9 +150,16 @@ def test_save_is_idempotent(scenario: Scenario, tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def _mutate(scenario: Scenario, **overrides: object) -> Scenario:
-    manifest = scenario.manifest.model_copy(update=overrides)
-    return Scenario(manifest=manifest, logs=scenario.logs, metrics=scenario.metrics)
+def _mutate(scenario: Scenario, **manifest_updates: object) -> Scenario:
+    """复制一个场景，只改清单里的字段 —— 其余仓库原样带过去。
+
+    用 ``dataclasses.replace`` 而不是手工列一遍字段：
+    Scenario 以后再加数据仓库时，这里不用跟着改。
+    """
+    return replace(
+        scenario,
+        manifest=scenario.manifest.model_copy(update=manifest_updates),
+    )
 
 
 def test_validate_catches_answer_leak_in_logs(scenario: Scenario) -> None:
@@ -160,7 +168,7 @@ def test_validate_catches_answer_leak_in_logs(scenario: Scenario) -> None:
     service = MockService("order-service", logs, seed=0)
     service.emit(LogLevel.ERROR, "database pool exhausted", T0)
 
-    broken = Scenario(manifest=scenario.manifest, logs=logs, metrics=scenario.metrics)
+    broken = replace(scenario, logs=logs)
     problems = broken.validate()
     assert any("泄漏了答案词" in p for p in problems), problems
     assert not broken.is_valid
@@ -173,13 +181,26 @@ def test_validate_catches_scoring_keyword_in_question(scenario: Scenario) -> Non
 
 
 def test_validate_catches_empty_logs(scenario: Scenario) -> None:
-    broken = Scenario(manifest=scenario.manifest, logs=LogStore(), metrics=scenario.metrics)
+    broken = replace(scenario, logs=LogStore())
     assert any("日志为空" in p for p in broken.validate())
 
 
 def test_validate_catches_empty_metrics(scenario: Scenario) -> None:
-    broken = Scenario(manifest=scenario.manifest, logs=scenario.logs, metrics=MetricStore())
+    broken = replace(scenario, metrics=MetricStore())
     assert any("指标为空" in p for p in broken.validate())
+
+
+def test_validate_catches_empty_config_history(scenario: Scenario) -> None:
+    broken = replace(scenario, configs=ConfigStore())
+    assert any("配置历史为空" in p for p in broken.validate())
+
+
+def test_validate_catches_missing_root_cause_change(scenario: Scenario) -> None:
+    """故障场景的配置历史里如果一次变化都没有，agent 查了也白查 —— 场景是坏的。"""
+    configs = ConfigStore()
+    configs.record_values(T0, "order-service", {"db.pool_size": 50})  # 唯一一份，没变化
+    broken = replace(scenario, configs=configs)
+    assert any("没有任何变化" in p for p in broken.validate())
 
 
 def test_validate_catches_missing_root_cause_service_in_topology(scenario: Scenario) -> None:
@@ -194,9 +215,9 @@ def test_validate_catches_failures_in_a_no_fault_scenario(scenario: Scenario) ->
     mutable_metrics.extend(scenario.metrics.all())
     mutable_metrics.record_request(T0, "order-service", 5000, status=500)
 
-    broken = Scenario(
+    broken = replace(
+        scenario,
         manifest=scenario.manifest.model_copy(update={"ground_truth": truth}),
-        logs=scenario.logs,
         metrics=mutable_metrics,
     )
     assert any("正常场景不该有失败请求" in p for p in broken.validate())
