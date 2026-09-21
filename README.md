@@ -39,7 +39,7 @@
 **不需要 API Key 就能看到结果**的部分（克隆后 1 分钟内）：
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB/fivewhys.git
+git clone https://github.com/lddd1026/fivewhys.git
 cd fivewhys
 pwsh -File scripts/setup.ps1                      # 建 .venv + 装依赖（约 3 分钟）
 .\.venv\Scripts\Activate.ps1

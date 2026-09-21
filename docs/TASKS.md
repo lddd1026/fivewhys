@@ -84,7 +84,7 @@
 | PRE-2 | P1 | 清理陈旧场景包会「删一半就崩」；符号链接/junction 未防 | ✅ `cdfb69d` |
 | PRE-3 | P1 | `.gitignore` 漏掉 `.env.production` 等变体 | ✅ `7e3e762` |
 | PRE-4 | **P0** | README 的「这是什么 / 快速开始 / 架构」是占位 | ✅ `f53fce2` |
-| PRE-5 | P2 | `pyproject.toml` 的 Homepage 仍是 `YOUR_GITHUB` | ⬜ 等你给仓库地址 |
+| PRE-5 | P2 | `pyproject.toml` 的 Homepage 是 `YOUR_GITHUB` | ✅ 已填 lddd1026/fivewhys |
 | PRE-6 | P1 | 依赖下界 `litellm>=1.0` 写错了（那些 API 1.0 没有） | ✅ `59e4cb9` |
 | PRE-7 | P1 | 多轮运行没有总预算闸门 | ✅ `ff0e821`（评测器仍需一个，归 FIV-20） |
 | PRE-8 | P2 | 文档第一条命令 `setup.ps1` 会因镜像 403 直接失败 | ✅ `7e3e762` 自动换源 |
