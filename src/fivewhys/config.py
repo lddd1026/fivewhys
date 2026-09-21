@@ -29,8 +29,9 @@ class Settings(BaseSettings):
     # 5 Whys 的最大追问层数 —— agent 的主要停止条件
     max_why_depth: int = 5
 
-    # 单次诊断的成本上限（美元）
-    max_cost_usd: float = 0.50
+    # 单次诊断的成本上限（美元）。超过即中止。
+    # 对应需求 NFR-2：硬上限 $0.10、平均目标 $0.03、全量评测（100 次）预算 $5。
+    max_cost_usd: float = 0.10
 
     # 单次诊断最多多少轮工具调用（兜底，防止死循环）
     max_steps: int = 20
